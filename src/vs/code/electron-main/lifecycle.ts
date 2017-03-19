@@ -7,7 +7,7 @@
 
 import { ipcMain as ipc, app } from 'electron';
 import { TPromise, TValueCallback } from 'vs/base/common/winjs.base';
-import { ReadyState, IVSCodeWindow } from 'vs/code/electron-main/window';
+import { ReadyState, VSCodeWindow } from 'vs/code/electron-main/window';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
 import { ILogService } from 'vs/code/electron-main/log';
 import { IStorageService } from 'vs/code/electron-main/storage';
@@ -15,6 +15,13 @@ import Event, { Emitter } from 'vs/base/common/event';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
 
 export const ILifecycleService = createDecorator<ILifecycleService>('lifecycleService');
+
+export enum UnloadReason {
+	CLOSE,
+	QUIT,
+	RELOAD,
+	LOAD
+}
 
 export interface ILifecycleService {
 	_serviceBrand: any;
@@ -31,10 +38,18 @@ export interface ILifecycleService {
 	 */
 	onBeforeQuit: Event<void>;
 
+	/**
+	 * We provide our own event when we close a window because the general window.on('close')
+	 * is called even when the window prevents the closing. We want an event that truly fires
+	 * before the window gets closed for real.
+	 */
+	onBeforeWindowClose: Event<VSCodeWindow>;
+
 	ready(): void;
-	registerWindow(vscodeWindow: IVSCodeWindow): void;
-	unload(vscodeWindow: IVSCodeWindow): TPromise<boolean /* veto */>;
+	registerWindow(vscodeWindow: VSCodeWindow): void;
+	unload(vscodeWindow: VSCodeWindow, reason: UnloadReason): TPromise<boolean /* veto */>;
 	quit(fromUpdate?: boolean): TPromise<boolean /* veto */>;
+	isQuitRequested(): boolean;
 }
 
 export class LifecycleService implements ILifecycleService {
@@ -52,6 +67,9 @@ export class LifecycleService implements ILifecycleService {
 
 	private _onBeforeQuit = new Emitter<void>();
 	onBeforeQuit: Event<void> = this._onBeforeQuit.event;
+
+	private _onBeforeWindowClose = new Emitter<VSCodeWindow>();
+	onBeforeWindowClose: Event<VSCodeWindow> = this._onBeforeWindowClose.event;
 
 	constructor(
 		@IEnvironmentService private environmentService: IEnvironmentService,
@@ -108,7 +126,7 @@ export class LifecycleService implements ILifecycleService {
 		});
 	}
 
-	public registerWindow(vscodeWindow: IVSCodeWindow): void {
+	public registerWindow(vscodeWindow: VSCodeWindow): void {
 
 		// Window Before Closing: Main -> Renderer
 		vscodeWindow.win.on('close', (e) => {
@@ -126,9 +144,10 @@ export class LifecycleService implements ILifecycleService {
 
 			// Otherwise prevent unload and handle it from window
 			e.preventDefault();
-			this.unload(vscodeWindow).done(veto => {
+			this.unload(vscodeWindow, UnloadReason.CLOSE).done(veto => {
 				if (!veto) {
 					this.windowToCloseRequest[windowId] = true;
+					this._onBeforeWindowClose.fire(vscodeWindow);
 					vscodeWindow.win.close();
 				} else {
 					this.quitRequested = false;
@@ -138,7 +157,7 @@ export class LifecycleService implements ILifecycleService {
 		});
 	}
 
-	public unload(vscodeWindow: IVSCodeWindow): TPromise<boolean /* veto */> {
+	public unload(vscodeWindow: VSCodeWindow, reason: UnloadReason): TPromise<boolean /* veto */> {
 
 		// Always allow to unload a window that is not yet ready
 		if (vscodeWindow.readyState !== ReadyState.READY) {
@@ -149,14 +168,14 @@ export class LifecycleService implements ILifecycleService {
 
 		return new TPromise<boolean>((c) => {
 			const oneTimeEventToken = this.oneTimeListenerTokenGenerator++;
-			const oneTimeOkEvent = 'vscode:ok' + oneTimeEventToken;
-			const oneTimeCancelEvent = 'vscode:cancel' + oneTimeEventToken;
+			const okChannel = `vscode:ok${oneTimeEventToken}`;
+			const cancelChannel = `vscode:cancel${oneTimeEventToken}`;
 
-			ipc.once(oneTimeOkEvent, () => {
+			ipc.once(okChannel, () => {
 				c(false); // no veto
 			});
 
-			ipc.once(oneTimeCancelEvent, () => {
+			ipc.once(cancelChannel, () => {
 
 				// Any cancellation also cancels a pending quit if present
 				if (this.pendingQuitPromiseComplete) {
@@ -168,7 +187,7 @@ export class LifecycleService implements ILifecycleService {
 				c(true); // veto
 			});
 
-			vscodeWindow.send('vscode:beforeUnload', { okChannel: oneTimeOkEvent, cancelChannel: oneTimeCancelEvent, quitRequested: this.quitRequested });
+			vscodeWindow.send('vscode:beforeUnload', { okChannel, cancelChannel, reason: this.quitRequested ? UnloadReason.QUIT : reason });
 		});
 	}
 
@@ -201,5 +220,9 @@ export class LifecycleService implements ILifecycleService {
 		}
 
 		return this.pendingQuitPromise;
+	}
+
+	public isQuitRequested(): boolean {
+		return !!this.quitRequested;
 	}
 }

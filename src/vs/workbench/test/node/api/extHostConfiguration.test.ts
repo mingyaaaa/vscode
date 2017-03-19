@@ -10,7 +10,7 @@ import { ExtHostConfiguration } from 'vs/workbench/api/node/extHostConfiguration
 import { MainThreadConfigurationShape } from 'vs/workbench/api/node/extHost.protocol';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { ConfigurationTarget, ConfigurationEditingErrorCode, IConfigurationEditingError } from 'vs/workbench/services/configuration/common/configurationEditing';
-import { IWorkspaceConfiguration, IWorkspaceConfigurationValue } from 'vs/workbench/services/configuration/common/configuration';
+import { IWorkspaceConfigurationValues, IWorkspaceConfigurationValue } from 'vs/workbench/services/configuration/common/configuration';
 
 suite('ExtHostConfiguration', function () {
 
@@ -22,7 +22,7 @@ suite('ExtHostConfiguration', function () {
 		}
 	};
 
-	function createExtHostConfiguration(data: IWorkspaceConfiguration = Object.create(null), shape?: MainThreadConfigurationShape) {
+	function createExtHostConfiguration(data: IWorkspaceConfigurationValues = Object.create(null), shape?: MainThreadConfigurationShape) {
 		if (!shape) {
 			shape = new class extends MainThreadConfigurationShape { };
 		}
@@ -67,7 +67,6 @@ suite('ExtHostConfiguration', function () {
 		assert.equal(config.get('config4'), '');
 		assert.equal(config['config0'], true);
 		assert.equal(config['config4'], '');
-		assert.throws(() => config['config4'] = 'valuevalue');
 
 		assert.ok(config.has('nested.config1'));
 		assert.equal(config.get('nested.config1'), 42);
@@ -156,12 +155,24 @@ suite('ExtHostConfiguration', function () {
 	});
 
 	test('bogous data, #15834', function () {
-		const shape = new RecordingShape();
-		const allConfig = createExtHostConfiguration({
-			['editor.formatOnSave']: createConfigurationValue(true),
-			['editor.formatOnSave.extensions']: createConfigurationValue(['ts'])
-		}, shape);
+		let oldLogger = console.error;
+		let errorLogged = false;
 
+		// workaround until we have a proper logging story
+		console.error = (message, args) => {
+			errorLogged = true;
+		};
+		let allConfig;
+		try {
+			const shape = new RecordingShape();
+			allConfig = createExtHostConfiguration({
+				['editor.formatOnSave']: createConfigurationValue(true),
+				['editor.formatOnSave.extensions']: createConfigurationValue(['ts'])
+			}, shape);
+		} finally {
+			console.error = oldLogger;
+		}
+		assert.ok(errorLogged);
 		assert.ok(allConfig.getConfiguration('').has('editor.formatOnSave'));
 		assert.ok(!allConfig.getConfiguration('').has('editor.formatOnSave.extensions'));
 	});

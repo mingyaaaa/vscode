@@ -7,11 +7,17 @@
 import URI from 'vs/base/common/uri';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
 import paths = require('vs/base/common/paths');
+import { isEqualOrParent } from 'vs/platform/files/common/files';
 
 export const IWorkspaceContextService = createDecorator<IWorkspaceContextService>('contextService');
 
 export interface IWorkspaceContextService {
 	_serviceBrand: any;
+
+	/**
+	 * Returns iff the application was opened with a workspace or not.
+	 */
+	hasWorkspace(): boolean;
 
 	/**
 	 * Provides access to the workspace object the platform is running with. This may be null if the workbench was opened
@@ -29,7 +35,7 @@ export interface IWorkspaceContextService {
 	 * without leading or trailing slashes. Returns null if the file is not inside an opened
 	 * workspace.
 	 */
-	toWorkspaceRelativePath: (resource: URI) => string;
+	toWorkspaceRelativePath: (resource: URI, toOSPath?: boolean) => string;
 
 	/**
 	 * Given a workspace relative path, returns the resource with the absolute path.
@@ -72,17 +78,21 @@ export class WorkspaceContextService implements IWorkspaceContextService {
 		return this.workspace;
 	}
 
+	public hasWorkspace(): boolean {
+		return !!this.workspace;
+	}
+
 	public isInsideWorkspace(resource: URI): boolean {
 		if (resource && this.workspace) {
-			return paths.isEqualOrParent(resource.fsPath, this.workspace.resource.fsPath);
+			return isEqualOrParent(resource.fsPath, this.workspace.resource.fsPath);
 		}
 
 		return false;
 	}
 
-	public toWorkspaceRelativePath(resource: URI): string {
+	public toWorkspaceRelativePath(resource: URI, toOSPath?: boolean): string {
 		if (this.isInsideWorkspace(resource)) {
-			return paths.normalize(paths.relative(this.workspace.resource.fsPath, resource.fsPath));
+			return paths.normalize(paths.relative(this.workspace.resource.fsPath, resource.fsPath), toOSPath);
 		}
 
 		return null;

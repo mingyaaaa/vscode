@@ -76,18 +76,30 @@ export class ContextMenuService implements IContextMenuService {
 
 				menu.append(submenu);
 			} else {
-				const keybinding = !!delegate.getKeyBinding ? delegate.getKeyBinding(e) : undefined;
-				const accelerator = keybinding && this.keybindingService.getElectronAcceleratorFor(keybinding);
-
-				const item = new remote.MenuItem({
+				const options: Electron.MenuItemOptions = {
 					label: e.label,
-					checked: !!e.checked,
-					accelerator,
+					checked: !!e.checked || !!e.radio,
+					type: !!e.checked ? 'checkbox' : !!e.radio ? 'radio' : void 0,
 					enabled: !!e.enabled,
 					click: (menuItem, win, event) => {
 						this.runAction(e, delegate, event);
 					}
-				});
+				};
+
+				const keybinding = !!delegate.getKeyBinding ? delegate.getKeyBinding(e) : undefined;
+				if (keybinding) {
+					const electronAccelerator = keybinding.getElectronAccelerator();
+					if (electronAccelerator) {
+						options.accelerator = electronAccelerator;
+					} else {
+						const label = keybinding.getLabel();
+						if (label) {
+							options.label = `${options.label} (${label})`;
+						}
+					}
+				}
+
+				const item = new remote.MenuItem(options);
 
 				menu.append(item);
 			}

@@ -7,7 +7,7 @@
 
 import * as assert from 'assert';
 import { setUnexpectedErrorHandler, errorHandler } from 'vs/base/common/errors';
-import { TestInstantiationService } from 'vs/test/utils/instantiationTestUtils';
+import { TestInstantiationService } from 'vs/platform/instantiation/test/common/instantiationServiceMock';
 import URI from 'vs/base/common/uri';
 import { TPromise } from 'vs/base/common/winjs.base';
 import * as types from 'vs/workbench/api/node/extHostTypes';
@@ -27,6 +27,7 @@ import { ExtHostCommands } from 'vs/workbench/api/node/extHostCommands';
 import { ExtHostHeapService } from 'vs/workbench/api/node/extHostHeapService';
 import { MainThreadCommands } from 'vs/workbench/api/node/mainThreadCommands';
 import { ExtHostDocuments } from 'vs/workbench/api/node/extHostDocuments';
+import { ExtHostDocumentsAndEditors } from 'vs/workbench/api/node/extHostDocumentsAndEditors';
 import { MainContext, ExtHostContext } from 'vs/workbench/api/node/extHost.protocol';
 import { ExtHostDiagnostics } from 'vs/workbench/api/node/extHostDiagnostics';
 import * as vscode from 'vscode';
@@ -68,7 +69,7 @@ suite('ExtHostLanguageFeatureCommands', function () {
 		instantiationService.stub(ICommandService, {
 			_serviceBrand: undefined,
 			executeCommand(id, args): any {
-				let {handler} = CommandsRegistry.getCommands()[id];
+				let { handler } = CommandsRegistry.getCommands()[id];
 				return TPromise.as(instantiationService.invokeFunction(handler, args));
 			}
 		});
@@ -78,6 +79,7 @@ suite('ExtHostLanguageFeatureCommands', function () {
 			_serviceBrand: IModelService,
 			getModel(): any { return model; },
 			createModel(): any { throw new Error(); },
+			updateModel(): any { throw new Error(); },
 			setMode(): any { throw new Error(); },
 			destroyModel(): any { throw new Error(); },
 			getModels(): any { throw new Error(); },
@@ -87,31 +89,23 @@ suite('ExtHostLanguageFeatureCommands', function () {
 			getCreationOptions(): any { throw new Error(); }
 		});
 
-		const extHostDocuments = new ExtHostDocuments(threadService);
-		threadService.set(ExtHostContext.ExtHostDocuments, extHostDocuments);
-		extHostDocuments.$acceptModelAdd({
-			isDirty: false,
-			versionId: model.getVersionId(),
-			modeId: model.getModeId(),
-			url: model.uri,
-			value: {
-				EOL: model.getEOL(),
+		const extHostDocumentsAndEditors = new ExtHostDocumentsAndEditors(threadService);
+		extHostDocumentsAndEditors.$acceptDocumentsAndEditorsDelta({
+			addedDocuments: [{
+				isDirty: false,
+				versionId: model.getVersionId(),
+				modeId: model.getLanguageIdentifier().language,
+				url: model.uri,
 				lines: model.getValue().split(model.getEOL()),
-				BOM: '',
-				length: -1,
-				containsRTL: false,
-				options: {
-					tabSize: 4,
-					insertSpaces: true,
-					trimAutoWhitespace: true,
-					defaultEOL: EditorCommon.DefaultEndOfLine.LF
-				}
-			},
+				EOL: model.getEOL(),
+			}]
 		});
+		const extHostDocuments = new ExtHostDocuments(threadService, extHostDocumentsAndEditors);
+		threadService.set(ExtHostContext.ExtHostDocuments, extHostDocuments);
 
 		const heapService = new ExtHostHeapService();
 
-		commands = new ExtHostCommands(threadService, null, heapService);
+		commands = new ExtHostCommands(threadService, heapService);
 		threadService.set(ExtHostContext.ExtHostCommands, commands);
 		threadService.setTestInstance(MainContext.MainThreadCommands, instantiationService.createInstance(MainThreadCommands));
 		ExtHostApiCommands.register(commands);

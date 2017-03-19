@@ -7,18 +7,20 @@
 
 import 'vs/workbench/parts/search/browser/search.contribution'; // load contributions
 import * as assert from 'assert';
+import * as fs from 'fs';
 import { WorkspaceContextService, IWorkspaceContextService } from 'vs/platform/workspace/common/workspace';
 import { createSyncDescriptor } from 'vs/platform/instantiation/common/descriptors';
 import { IEditorGroupService } from 'vs/workbench/services/group/common/groupService';
 import { ISearchService, IQueryOptions } from 'vs/platform/search/common/search';
-import { ITelemetryService, ITelemetryInfo, ITelemetryExperiments, defaultExperiments } from 'vs/platform/telemetry/common/telemetry';
+import { ITelemetryService, ITelemetryInfo, ITelemetryExperiments } from 'vs/platform/telemetry/common/telemetry';
+import { defaultExperiments } from 'vs/platform/telemetry/common/telemetryUtils';
 import { IUntitledEditorService, UntitledEditorService } from 'vs/workbench/services/untitled/common/untitledEditorService';
 import { IWorkbenchEditorService } from 'vs/workbench/services/editor/common/editorService';
 import * as minimist from 'minimist';
 import * as path from 'path';
 import { SearchService } from 'vs/workbench/services/search/node/searchService';
 import { ServiceCollection } from 'vs/platform/instantiation/common/serviceCollection';
-import { TestEnvironmentService, TestEditorService, TestEditorGroupService } from 'vs/test/utils/servicesTestUtils';
+import { TestEnvironmentService, TestEditorService, TestEditorGroupService } from 'vs/workbench/test/workbenchTestServices';
 import { IEnvironmentService } from 'vs/platform/environment/common/environment';
 import { TPromise } from 'vs/base/common/winjs.base';
 import URI from 'vs/base/common/uri';
@@ -43,20 +45,23 @@ suite('TextSearch performance', () => {
 
 	test('Measure', () => {
 		if (process.env['VSCODE_PID']) {
-			return; // TODO@Rob find out why test fails when run from within VS Code
+			return undefined; // TODO@Rob find out why test fails when run from within VS Code
 		}
 
 		const n = 3;
 		const argv = minimist(process.argv);
 		const testWorkspaceArg = argv['testWorkspace'];
 		const testWorkspacePath = testWorkspaceArg ? path.resolve(testWorkspaceArg) : __dirname;
+		if (!fs.existsSync(testWorkspacePath)) {
+			throw new Error(`--testWorkspace doesn't exist`);
+		}
 
 		const telemetryService = new TestTelemetryService();
 		const configurationService = new SimpleConfigurationService();
 		const instantiationService = new InstantiationService(new ServiceCollection(
 			[ITelemetryService, telemetryService],
 			[IConfigurationService, new SimpleConfigurationService()],
-			[IModelService, new ModelServiceImpl(null, configurationService, null)],
+			[IModelService, new ModelServiceImpl(null, configurationService)],
 			[IWorkspaceContextService, new WorkspaceContextService({ resource: URI.file(testWorkspacePath) })],
 			[IWorkbenchEditorService, new TestEditorService()],
 			[IEditorGroupService, new TestEditorGroupService()],
@@ -70,8 +75,8 @@ suite('TextSearch performance', () => {
 			maxResults: 2048
 		};
 
+		const searchModel: SearchModel = instantiationService.createInstance(SearchModel);
 		function runSearch(): TPromise<any> {
-			const searchModel: SearchModel = instantiationService.createInstance(SearchModel);
 			const queryBuilder: QueryBuilder = instantiationService.createInstance(QueryBuilder);
 			const query = queryBuilder.text({ pattern: 'static_library(' }, queryOptions);
 

@@ -11,11 +11,25 @@ import glob = require('vs/base/common/glob');
 import events = require('vs/base/common/events');
 import { isLinux } from 'vs/base/common/platform';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
+import Event from 'vs/base/common/event';
+import { Schemas } from 'vs/base/common/network';
+import { equalsIgnoreCase, beginsWithIgnoreCase } from 'vs/base/common/strings';
 
 export const IFileService = createDecorator<IFileService>('fileService');
 
 export interface IFileService {
 	_serviceBrand: any;
+
+	/**
+	 * Allows to listen for file changes. The event will fire for every file within the opened workspace
+	 * (if any) as well as all files that have been watched explicitly using the #watchFileChanges() API.
+	 */
+	onFileChanges: Event<FileChangesEvent>;
+
+	/**
+	 * An event that is fired upon successful completion of a certain file operation.
+	 */
+	onAfterOperation: Event<FileOperationEvent>;
 
 	/**
 	 * Resolve the properties of a file identified by the resource.
@@ -127,11 +141,41 @@ export interface IFileService {
 	updateOptions(options: any): void;
 
 	/**
+	 * Returns the preferred encoding to use for a given resource.
+	 */
+	getEncoding(resource: URI): string;
+
+	/**
 	 * Frees up any resources occupied by this service.
 	 */
 	dispose(): void;
 }
 
+export enum FileOperation {
+	CREATE,
+	DELETE,
+	MOVE,
+	COPY,
+	IMPORT
+}
+
+export class FileOperationEvent {
+
+	constructor(private _resource: URI, private _operation: FileOperation, private _target?: IFileStat) {
+	}
+
+	public get resource(): URI {
+		return this._resource;
+	}
+
+	public get target(): IFileStat {
+		return this._target;
+	}
+
+	public get operation(): FileOperation {
+		return this._operation;
+	}
+}
 
 /**
  * Possible changes that can occur to a file.
@@ -141,17 +185,6 @@ export enum FileChangeType {
 	ADDED = 1,
 	DELETED = 2
 }
-
-/**
- * Possible events to subscribe to
- */
-export const EventType = {
-
-	/**
-	* Send on file changes.
-	*/
-	FILE_CHANGES: 'files:fileChanges'
-};
 
 /**
  * Identifies a single change in a file.
@@ -192,14 +225,14 @@ export class FileChangesEvent extends events.Event {
 			return false;
 		}
 
-		return this._changes.some((change) => {
+		return this._changes.some(change => {
 			if (change.type !== type) {
 				return false;
 			}
 
 			// For deleted also return true when deleted folder is parent of target path
 			if (type === FileChangeType.DELETED) {
-				return isEqual(resource.fsPath, change.resource.fsPath) || isParent(resource.fsPath, change.resource.fsPath);
+				return isEqualOrParent(resource.fsPath, change.resource.fsPath);
 			}
 
 			return isEqual(resource.fsPath, change.resource.fsPath);
@@ -249,32 +282,130 @@ export class FileChangesEvent extends events.Event {
 	}
 
 	private getOfType(type: FileChangeType): IFileChange[] {
-		return this._changes.filter((change) => change.type === type);
+		return this._changes.filter(change => change.type === type);
 	}
 
 	private hasType(type: FileChangeType): boolean {
-		return this._changes.some((change) => {
+		return this._changes.some(change => {
 			return change.type === type;
 		});
 	}
 }
 
-export function isEqual(path1: string, path2: string) {
-	const identityEquals = (path1 === path2);
-	if (isLinux || identityEquals) {
+export function isEqual(resourceA: URI, resourceB: URI): boolean;
+export function isEqual(pathA: string, pathB: string): boolean;
+export function isEqual(resourceOrPathA: string | URI, resourceOrPathB: string | URI): boolean {
+	const identityEquals = (resourceOrPathA === resourceOrPathB);
+	if (identityEquals) {
+		return true;
+	}
+
+	if (!resourceOrPathA || !resourceOrPathB) {
+		return false;
+	}
+
+	// Compare by URI
+	if (typeof resourceOrPathA !== 'string') {
+		const resourceA = resourceOrPathA;
+		const resourceB = resourceOrPathB as URI;
+
+		if (resourceA.scheme !== resourceB.scheme) {
+			return false;
+		}
+
+		// File URIs compare by fsPath
+		if (resourceA.scheme === Schemas.file) {
+			return isEqual(resourceA.fsPath, resourceB.fsPath);
+		}
+
+		// Non-file URIs compare by full string
+		return resourceA.toString() === resourceB.toString();
+	}
+
+	// Compare by Path
+	const pathA = resourceOrPathA;
+	const pathB = resourceOrPathB as string;
+
+	if (isLinux) {
 		return identityEquals;
 	}
 
-	return path1.toLowerCase() === path2.toLowerCase();
+	return equalsIgnoreCase(pathA, pathB);
 }
 
 export function isParent(path: string, candidate: string): boolean {
+	if (!path || !candidate || path === candidate) {
+		return false;
+	}
+
+	if (candidate.length > path.length) {
+		return false;
+	}
+
+	if (candidate.charAt(candidate.length - 1) !== paths.nativeSep) {
+		candidate += paths.nativeSep;
+	}
+
+	if (!isLinux) {
+		return beginsWithIgnoreCase(path, candidate);
+	}
+
+	return path.indexOf(candidate) === 0;
+}
+
+export function isEqualOrParent(path: string, candidate: string): boolean {
+	if (path === candidate) {
+		return true;
+	}
+
+	if (!path || !candidate) {
+		return false;
+	}
+
+	if (candidate.length > path.length) {
+		return false;
+	}
+
+	if (!isLinux) {
+		const beginsWith = beginsWithIgnoreCase(path, candidate);
+		if (!beginsWith) {
+			return false;
+		}
+
+		if (candidate.length === path.length) {
+			return true; // same path, different casing
+		}
+
+		let sepOffset = candidate.length;
+		if (candidate.charAt(candidate.length - 1) === paths.nativeSep) {
+			sepOffset--; // adjust the expected sep offset in case our candidate already ends in separator character
+		}
+
+		return path.charAt(sepOffset) === paths.nativeSep;
+	}
+
+	if (candidate.charAt(candidate.length - 1) !== paths.nativeSep) {
+		candidate += paths.nativeSep;
+	}
+
+	return path.indexOf(candidate) === 0;
+}
+
+export function indexOf(path: string, candidate: string): number {
+	if (candidate.length > path.length) {
+		return -1;
+	}
+
+	if (path === candidate) {
+		return 0;
+	}
+
 	if (!isLinux) {
 		path = path.toLowerCase();
 		candidate = candidate.toLowerCase();
 	}
 
-	return path.indexOf(candidate + paths.nativeSep) === 0;
+	return path.indexOf(candidate);
 }
 
 export interface IBaseStat {
@@ -459,6 +590,14 @@ export const AutoSaveConfiguration = {
 	ON_WINDOW_CHANGE: 'onWindowChange'
 };
 
+export const HotExitConfiguration = {
+	OFF: 'off',
+	ON_EXIT: 'onExit',
+	ON_EXIT_AND_WINDOW_CLOSE: 'onExitAndWindowClose'
+};
+
+export const CONTENT_CHANGE_EVENT_BUFFER_DELAY = 1000;
+
 export interface IFilesConfiguration {
 	files: {
 		associations: { [filepattern: string]: string };
@@ -469,7 +608,7 @@ export interface IFilesConfiguration {
 		autoSave: string;
 		autoSaveDelay: number;
 		eol: string;
-		hotExit: boolean;
+		hotExit: string;
 	};
 }
 

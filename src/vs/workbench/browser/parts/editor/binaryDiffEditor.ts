@@ -20,6 +20,7 @@ import { BinaryEditorModel } from 'vs/workbench/common/editor/binaryEditorModel'
 import { DiffEditorModel } from 'vs/workbench/common/editor/diffEditorModel';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { ScrollbarVisibility } from 'vs/base/common/scrollable';
+import { IThemeService } from 'vs/platform/theme/common/themeService';
 
 /**
  * An implementation of editor for diffing binary files like images or videos.
@@ -44,9 +45,10 @@ export class BinaryResourceDiffEditor extends BaseEditor implements IVerticalSas
 	private startLeftContainerWidth: number;
 
 	constructor(
-		@ITelemetryService telemetryService: ITelemetryService
+		@ITelemetryService telemetryService: ITelemetryService,
+		@IThemeService themeService: IThemeService
 	) {
-		super(BinaryResourceDiffEditor.ID, telemetryService);
+		super(BinaryResourceDiffEditor.ID, telemetryService, themeService);
 
 		this._onMetadataChanged = new Emitter<void>();
 	}
@@ -56,10 +58,10 @@ export class BinaryResourceDiffEditor extends BaseEditor implements IVerticalSas
 	}
 
 	public getTitle(): string {
-		return this.getInput() ? this.getInput().getName() : nls.localize('binaryDiffEditor', "Binary Diff Viewer");
+		return this.input ? this.input.getName() : nls.localize('binaryDiffEditor', "Binary Diff Viewer");
 	}
 
-	public createEditor(parent: Builder): void {
+	protected createEditor(parent: Builder): void {
 
 		// Left Container for Binary
 		const leftBinaryContainerElement = document.createElement('div');
@@ -91,8 +93,8 @@ export class BinaryResourceDiffEditor extends BaseEditor implements IVerticalSas
 		$(this.rightScrollbar.getDomNode()).addClass('binarydiff-right');
 	}
 
-	public setInput(input: EditorInput, options: EditorOptions): TPromise<void> {
-		const oldInput = this.getInput();
+	public setInput(input: EditorInput, options?: EditorOptions): TPromise<void> {
+		const oldInput = this.input;
 		super.setInput(input, options);
 
 		// Detect options
@@ -112,7 +114,7 @@ export class BinaryResourceDiffEditor extends BaseEditor implements IVerticalSas
 			}
 
 			// Assert that the current input is still the one we expect. This prevents a race condition when loading a diff takes long and another input was set meanwhile
-			if (!this.getInput() || this.getInput() !== input) {
+			if (!this.input || this.input !== input) {
 				return null;
 			}
 
@@ -123,6 +125,7 @@ export class BinaryResourceDiffEditor extends BaseEditor implements IVerticalSas
 			// Render modified
 			const modified = <BinaryEditorModel>resolvedModel.modifiedModel;
 			this.renderInput(modified.getName(), modified.getResource(), modified.getSize(), modified.getETag(), false);
+			return undefined;
 		});
 	}
 

@@ -59,22 +59,25 @@ export function and(...filter: IFilter[]): IFilter {
 
 // Prefix
 
-export let matchesStrictPrefix: IFilter = (word: string, wordToMatchAgainst: string): IMatch[] => { return _matchesPrefix(false, word, wordToMatchAgainst); };
-export let matchesPrefix: IFilter = (word: string, wordToMatchAgainst: string): IMatch[] => { return _matchesPrefix(true, word, wordToMatchAgainst); };
+export const matchesStrictPrefix: IFilter = _matchesPrefix.bind(undefined, false);
+export const matchesPrefix: IFilter = _matchesPrefix.bind(undefined, true);
 
 function _matchesPrefix(ignoreCase: boolean, word: string, wordToMatchAgainst: string): IMatch[] {
-	if (!wordToMatchAgainst || wordToMatchAgainst.length === 0 || wordToMatchAgainst.length < word.length) {
+	if (!wordToMatchAgainst || wordToMatchAgainst.length < word.length) {
 		return null;
 	}
+
+	let matches: boolean;
 	if (ignoreCase) {
-		word = word.toLowerCase();
-		wordToMatchAgainst = wordToMatchAgainst.toLowerCase();
+		matches = strings.beginsWithIgnoreCase(wordToMatchAgainst, word);
+	} else {
+		matches = wordToMatchAgainst.indexOf(word) === 0;
 	}
-	for (let i = 0; i < word.length; i++) {
-		if (word[i] !== wordToMatchAgainst[i]) {
-			return null;
-		}
+
+	if (!matches) {
+		return null;
 	}
+
 	return word.length > 0 ? [{ start: 0, end: word.length }] : [];
 }
 
@@ -168,7 +171,7 @@ function _matchesCamelCase(word: string, camelCaseWord: string, i: number, j: nu
 	} else if (word[i] !== camelCaseWord[j].toLowerCase()) {
 		return null;
 	} else {
-		let result = null;
+		let result: IMatch[] = null;
 		let nextUpperIndex = j + 1;
 		result = _matchesCamelCase(word, camelCaseWord, i + 1, j + 1);
 		while (!result && (nextUpperIndex = nextAnchor(camelCaseWord, nextUpperIndex)) < camelCaseWord.length) {
@@ -209,7 +212,7 @@ function analyzeCamelCaseWord(word: string): ICamelCaseAnalysis {
 }
 
 function isUpperCaseWord(analysis: ICamelCaseAnalysis): boolean {
-	const { upperPercent, lowerPercent, alphaPercent, numericPercent } = analysis;
+	const { upperPercent, lowerPercent } = analysis;
 	return lowerPercent === 0 && upperPercent > 0.6;
 }
 
@@ -272,10 +275,11 @@ export function matchesCamelCase(word: string, camelCaseWord: string): IMatch[] 
 }
 
 // Matches beginning of words supporting non-ASCII languages
-// E.g. "gp" or "g p" will match "Git: Pull"
+// If `contiguous` is true then matches word with beginnings of the words in the target. E.g. "pul" will match "Git: Pull"
+// Otherwise also matches sub string of the word with beginnings of the words in the target. E.g. "gp" or "g p" will match "Git: Pull"
 // Useful in cases where the target is words (e.g. command labels)
 
-export function matchesWords(word: string, target: string): IMatch[] {
+export function matchesWords(word: string, target: string, contiguous: boolean = false): IMatch[] {
 	if (!target || target.length === 0) {
 		return null;
 	}
@@ -283,14 +287,14 @@ export function matchesWords(word: string, target: string): IMatch[] {
 	let result: IMatch[] = null;
 	let i = 0;
 
-	while (i < target.length && (result = _matchesWords(word.toLowerCase(), target, 0, i)) === null) {
+	while (i < target.length && (result = _matchesWords(word.toLowerCase(), target, 0, i, contiguous)) === null) {
 		i = nextWord(target, i + 1);
 	}
 
 	return result;
 }
 
-function _matchesWords(word: string, target: string, i: number, j: number): IMatch[] {
+function _matchesWords(word: string, target: string, i: number, j: number, contiguous: boolean): IMatch[] {
 	if (i === word.length) {
 		return [];
 	} else if (j === target.length) {
@@ -298,12 +302,14 @@ function _matchesWords(word: string, target: string, i: number, j: number): IMat
 	} else if (word[i] !== target[j].toLowerCase()) {
 		return null;
 	} else {
-		let result = null;
+		let result: IMatch[] = null;
 		let nextWordIndex = j + 1;
-		result = _matchesWords(word, target, i + 1, j + 1);
-		while (!result && (nextWordIndex = nextWord(target, nextWordIndex)) < target.length) {
-			result = _matchesWords(word, target, i + 1, nextWordIndex);
-			nextWordIndex++;
+		result = _matchesWords(word, target, i + 1, j + 1, contiguous);
+		if (!contiguous) {
+			while (!result && (nextWordIndex = nextWord(target, nextWordIndex)) < target.length) {
+				result = _matchesWords(word, target, i + 1, nextWordIndex, contiguous);
+				nextWordIndex++;
+			}
 		}
 		return result === null ? null : join({ start: j, end: j + 1 }, result);
 	}

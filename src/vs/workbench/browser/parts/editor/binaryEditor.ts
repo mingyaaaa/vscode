@@ -16,6 +16,7 @@ import { BinaryEditorModel } from 'vs/workbench/common/editor/binaryEditorModel'
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { DomScrollableElement } from 'vs/base/browser/ui/scrollbar/scrollableElement';
 import { ScrollbarVisibility } from 'vs/base/common/scrollable';
+import { IThemeService } from 'vs/platform/theme/common/themeService';
 
 /*
  * This class is only intended to be subclassed and not instantiated.
@@ -29,9 +30,10 @@ export abstract class BaseBinaryResourceEditor extends BaseEditor {
 
 	constructor(
 		id: string,
-		telemetryService: ITelemetryService
+		telemetryService: ITelemetryService,
+		themeService: IThemeService
 	) {
-		super(id, telemetryService);
+		super(id, telemetryService, themeService);
 
 		this._onMetadataChanged = new Emitter<void>();
 	}
@@ -41,10 +43,10 @@ export abstract class BaseBinaryResourceEditor extends BaseEditor {
 	}
 
 	public getTitle(): string {
-		return this.getInput() ? this.getInput().getName() : nls.localize('binaryEditor', "Binary Viewer");
+		return this.input ? this.input.getName() : nls.localize('binaryEditor', "Binary Viewer");
 	}
 
-	public createEditor(parent: Builder): void {
+	protected createEditor(parent: Builder): void {
 
 		// Container for Binary
 		const binaryContainerElement = document.createElement('div');
@@ -57,8 +59,8 @@ export abstract class BaseBinaryResourceEditor extends BaseEditor {
 		parent.getHTMLElement().appendChild(this.scrollbar.getDomNode());
 	}
 
-	public setInput(input: EditorInput, options: EditorOptions): TPromise<void> {
-		const oldInput = this.getInput();
+	public setInput(input: EditorInput, options?: EditorOptions): TPromise<void> {
+		const oldInput = this.input;
 		super.setInput(input, options);
 
 		// Detect options
@@ -78,7 +80,7 @@ export abstract class BaseBinaryResourceEditor extends BaseEditor {
 			}
 
 			// Assert that the current input is still the one we expect. This prevents a race condition when loading takes long and another input was set meanwhile
-			if (!this.getInput() || this.getInput() !== input) {
+			if (!this.input || this.input !== input) {
 				return null;
 			}
 
@@ -128,19 +130,5 @@ export abstract class BaseBinaryResourceEditor extends BaseEditor {
 		this.scrollbar.dispose();
 
 		super.dispose();
-	}
-}
-
-/**
- * An implementation of editor for binary files like images or videos.
- */
-export class BinaryResourceEditor extends BaseBinaryResourceEditor {
-
-	public static ID = 'workbench.editors.binaryResourceEditor';
-
-	constructor(
-		@ITelemetryService telemetryService: ITelemetryService
-	) {
-		super(BinaryResourceEditor.ID, telemetryService);
 	}
 }

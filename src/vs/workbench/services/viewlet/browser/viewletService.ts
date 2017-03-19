@@ -8,16 +8,17 @@ import { TPromise, ValueCallback } from 'vs/base/common/winjs.base';
 import { IViewlet } from 'vs/workbench/common/viewlet';
 import { IViewletService } from 'vs/workbench/services/viewlet/browser/viewlet';
 import Event from 'vs/base/common/event';
-import { ISidebar } from 'vs/workbench/browser/parts/sidebar/sidebarPart';
+import { SidebarPart } from 'vs/workbench/browser/parts/sidebar/sidebarPart';
 import { Registry } from 'vs/platform/platform';
 import { ViewletDescriptor, ViewletRegistry, Extensions as ViewletExtensions } from 'vs/workbench/browser/viewlet';
 import { IExtensionService } from 'vs/platform/extensions/common/extensions';
+import { IProgressService } from 'vs/platform/progress/common/progress';
 
 export class ViewletService implements IViewletService {
 
 	public _serviceBrand: any;
 
-	private sidebarPart: ISidebar;
+	private sidebarPart: SidebarPart;
 	private viewletRegistry: ViewletRegistry;
 
 	private extensionViewlets: ViewletDescriptor[];
@@ -28,7 +29,7 @@ export class ViewletService implements IViewletService {
 	public get onDidViewletClose(): Event<IViewlet> { return this.sidebarPart.onDidViewletClose; };
 
 	constructor(
-		sidebarPart: ISidebar,
+		sidebarPart: SidebarPart,
 		@IExtensionService private extensionService: IExtensionService
 	) {
 		this.sidebarPart = sidebarPart;
@@ -47,7 +48,7 @@ export class ViewletService implements IViewletService {
 		this.extensionService.onReady().then(() => {
 			const viewlets = this.viewletRegistry.getViewlets();
 			viewlets.forEach(v => {
-				if (v.fromExtension) {
+				if (!!v.extensionId) {
 					this.extensionViewlets.push(v);
 				}
 			});
@@ -72,7 +73,7 @@ export class ViewletService implements IViewletService {
 			}
 
 			// Fallback to default viewlet if extension viewlet is still not found (e.g. uninstalled)
-			return this.sidebarPart.openViewlet(this.viewletRegistry.getDefaultViewletId(), focus);
+			return this.sidebarPart.openViewlet(this.getDefaultViewletId(), focus);
 		});
 	}
 
@@ -88,7 +89,19 @@ export class ViewletService implements IViewletService {
 
 	private getBuiltInViewlets(): ViewletDescriptor[] {
 		return this.viewletRegistry.getViewlets()
-			.filter(viewlet => !viewlet.fromExtension)
+			.filter(viewlet => !viewlet.extensionId)
 			.sort((v1, v2) => v1.order - v2.order);
+	}
+
+	public getDefaultViewletId(): string {
+		return this.viewletRegistry.getDefaultViewletId();
+	}
+
+	public getViewlet(id: string): ViewletDescriptor {
+		return this.getViewlets().filter(viewlet => viewlet.id === id)[0];
+	}
+
+	public getProgressIndicator(id: string): IProgressService {
+		return this.sidebarPart.getProgressIndicator(id);
 	}
 }

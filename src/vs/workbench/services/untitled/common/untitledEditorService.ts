@@ -68,7 +68,7 @@ export interface IUntitledEditorService {
 	 * It is valid to pass in a file resource. In that case the path will be used as identifier.
 	 * The use case is to be able to create a new file with a specific path with VSCode.
 	 */
-	createOrGet(resource?: URI, modeId?: string): UntitledEditorInput;
+	createOrGet(resource?: URI, modeId?: string, initialValue?: string): UntitledEditorInput;
 
 	/**
 	 * A check to find out if a untitled resource has a file path associated or not.
@@ -154,7 +154,7 @@ export class UntitledEditorService implements IUntitledEditorService {
 			.map((i) => i.getResource());
 	}
 
-	public createOrGet(resource?: URI, modeId?: string): UntitledEditorInput {
+	public createOrGet(resource?: URI, modeId?: string, initialValue?: string): UntitledEditorInput {
 		let hasAssociatedFilePath = false;
 		if (resource) {
 			hasAssociatedFilePath = (resource.scheme === 'file');
@@ -171,21 +171,21 @@ export class UntitledEditorService implements IUntitledEditorService {
 		}
 
 		// Create new otherwise
-		return this.doCreate(resource, hasAssociatedFilePath, modeId);
+		return this.doCreate(resource, hasAssociatedFilePath, modeId, initialValue);
 	}
 
-	private doCreate(resource?: URI, hasAssociatedFilePath?: boolean, modeId?: string): UntitledEditorInput {
+	private doCreate(resource?: URI, hasAssociatedFilePath?: boolean, modeId?: string, initialValue?: string): UntitledEditorInput {
 		if (!resource) {
 
 			// Create new taking a resource URI that is not already taken
 			let counter = Object.keys(UntitledEditorService.CACHE).length + 1;
 			do {
-				resource = URI.from({ scheme: UntitledEditorInput.SCHEMA, path: 'Untitled-' + counter });
+				resource = URI.from({ scheme: UntitledEditorInput.SCHEMA, path: `Untitled-${counter}` });
 				counter++;
 			} while (Object.keys(UntitledEditorService.CACHE).indexOf(resource.toString()) >= 0);
 		}
 
-		const input = this.instantiationService.createInstance(UntitledEditorInput, resource, hasAssociatedFilePath, modeId);
+		const input = this.instantiationService.createInstance(UntitledEditorInput, resource, hasAssociatedFilePath, modeId, initialValue);
 
 		const contentListener = input.onDidModelChangeContent(() => {
 			this._onDidChangeContent.fire(resource);

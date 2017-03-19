@@ -3,13 +3,17 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { TPromise } from 'vs/base/common/winjs.base';
-import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
-import { IRange } from 'vs/editor/common/editorCommon';
 import URI from 'vs/base/common/uri';
-import { IConfigurationValue } from 'vs/workbench/services/configuration/common/configurationEditing';
+import { TPromise } from 'vs/base/common/winjs.base';
+import { LinkedMap as Map } from 'vs/base/common/map';
+import { IRange } from 'vs/editor/common/editorCommon';
+import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
+import { RawContextKey } from 'vs/platform/contextkey/common/contextkey';
+import { IEditor } from 'vs/platform/editor/common/editor';
+import { IKeybindingItemEntry } from 'vs/workbench/parts/preferences/common/keybindingsEditorModel';
 
 export interface ISettingsGroup {
+	id: string;
 	range: IRange;
 	title: string;
 	titleRange: IRange;
@@ -17,29 +21,43 @@ export interface ISettingsGroup {
 }
 
 export interface ISettingsSection {
-	descriptionRange?: IRange;
-	description?: string;
+	titleRange?: IRange;
+	title?: string;
 	settings: ISetting[];
 }
 
 export interface ISetting {
 	range: IRange;
 	key: string;
+	keyRange: IRange;
 	value: any;
 	valueRange: IRange;
-	description: string;
+	description: string[];
+	descriptionRanges: IRange[];
+	overrides?: ISetting[];
+	overrideOf?: ISetting;
 }
 
-export interface IPreferencesEditorModel {
+export interface IFilterResult {
+	filteredGroups: ISettingsGroup[];
+	allGroups: ISettingsGroup[];
+	matches: Map<string, IRange[]>;
+}
+
+export interface IPreferencesEditorModel<T> {
 	uri: URI;
 	content: string;
+	getPreference(key: string): T;
+	dispose(): void;
 }
 
-export interface ISettingsEditorModel extends IPreferencesEditorModel {
+export interface ISettingsEditorModel extends IPreferencesEditorModel<ISetting> {
 	settingsGroups: ISettingsGroup[];
+	groupsTerms: string[];
+	filterSettings(filter: string): IFilterResult;
 }
 
-export interface IKeybindingsEditorModel extends IPreferencesEditorModel {
+export interface IKeybindingsEditorModel<T> extends IPreferencesEditorModel<T> {
 }
 
 export const IPreferencesService = createDecorator<IPreferencesService>('preferencesService');
@@ -47,15 +65,39 @@ export const IPreferencesService = createDecorator<IPreferencesService>('prefere
 export interface IPreferencesService {
 	_serviceBrand: any;
 
-	getDefaultSettingsEditorModel(): TPromise<ISettingsEditorModel>;
-	getUserSettingsEditorModel(): TPromise<ISettingsEditorModel>;
-	getWorkspaceSettingsEditorModel(): TPromise<ISettingsEditorModel>;
-	getDefaultKeybindingsEditorModel(): TPromise<IKeybindingsEditorModel>;
+	defaultSettingsResource: URI;
+	userSettingsResource: URI;
+	workspaceSettingsResource: URI;
+	defaultKeybindingsResource: URI;
 
-	resolvePreferencesEditorModel(uri: URI): TPromise<IPreferencesEditorModel>;
+	createPreferencesEditorModel<T>(uri: URI): TPromise<IPreferencesEditorModel<T>>;
 
-	openGlobalSettings(): TPromise<void>;
-	openWorkspaceSettings(): TPromise<void>;
-	openGlobalKeybindingSettings(): TPromise<void>;
-	copyConfiguration(configurationValue: IConfigurationValue): void;
+	openSettings(): TPromise<IEditor>;
+	switchSettings(): TPromise<void>;
+	openGlobalSettings(): TPromise<IEditor>;
+	openWorkspaceSettings(): TPromise<IEditor>;
+	openGlobalKeybindingSettings(textual: boolean): TPromise<void>;
+
+	configureSettingsForLanguage(language: string): void;
 }
+
+
+export interface IKeybindingsEditor extends IEditor {
+
+	activeKeybindingEntry: IKeybindingItemEntry;
+
+	search(filter: string): void;
+	defineKeybinding(keybindingEntry: IKeybindingItemEntry): TPromise<any>;
+	removeKeybinding(keybindingEntry: IKeybindingItemEntry): TPromise<any>;
+	copyKeybinding(keybindingEntry: IKeybindingItemEntry): TPromise<any>;
+}
+
+export const CONTEXT_SETTINGS_EDITOR = new RawContextKey<boolean>('inSettingsEditor', false);
+export const CONTEXT_KEYBINDINGS_EDITOR = new RawContextKey<boolean>('inKeybindings', false);
+export const CONTEXT_KEYBINDING_FOCUS = new RawContextKey<boolean>('keybindingFocus', false);
+
+export const SETTINGS_EDITOR_COMMAND_SEARCH = 'settings.action.search';
+export const KEYBINDINGS_EDITOR_COMMAND_SEARCH = 'keybindings.editor.searchKeybindings';
+export const KEYBINDINGS_EDITOR_COMMAND_DEFINE = 'keybindings.editor.defineKeybinding';
+export const KEYBINDINGS_EDITOR_COMMAND_REMOVE = 'keybindings.editor.removeKeybinding';
+export const KEYBINDINGS_EDITOR_COMMAND_COPY = 'keybindings.editor.copyKeybindingEntry';

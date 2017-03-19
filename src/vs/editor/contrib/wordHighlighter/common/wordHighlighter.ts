@@ -4,8 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 'use strict';
 
+import nls = require('vs/nls');
+
 import { sequence, asWinJsPromise } from 'vs/base/common/async';
-import { onUnexpectedError } from 'vs/base/common/errors';
+import { onUnexpectedExternalError } from 'vs/base/common/errors';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { Range } from 'vs/editor/common/core/range';
 import * as editorCommon from 'vs/editor/common/editorCommon';
@@ -13,6 +15,14 @@ import { CommonEditorRegistry, commonEditorContribution } from 'vs/editor/common
 import { DocumentHighlight, DocumentHighlightKind, DocumentHighlightProviderRegistry } from 'vs/editor/common/modes';
 import { IDisposable, dispose } from 'vs/base/common/lifecycle';
 import { Position } from 'vs/editor/common/core/position';
+
+import { registerColor, editorSelectionHighlightColor, editorBackground, editorSelection } from 'vs/platform/theme/common/colorRegistry';
+import { ITheme, ICssStyleCollector, registerThemingParticipant } from 'vs/platform/theme/common/themeService';
+import { Color } from 'vs/base/common/color';
+
+export const editorWordHighlight = registerColor('editorWordHighlight', { dark: '#575757B8', light: '#57575740', hc: null }, nls.localize('wordHighlight', 'Background color of a symbol during read-access, like reading a variable'));
+export const editorWordHighlightString = registerColor('editorWordHighlightStrong', { dark: '#004972B8', light: '#0e639c40', hc: null }, nls.localize('wordHighlightStrong', 'Background color of a symbol during write-access, like writing to a variable'));
+
 
 export function getOccurrencesAtPosition(model: editorCommon.IReadOnlyModel, position: Position): TPromise<DocumentHighlight[]> {
 
@@ -32,10 +42,12 @@ export function getOccurrencesAtPosition(model: editorCommon.IReadOnlyModel, pos
 						foundResult = true;
 						return data;
 					}
+					return undefined;
 				}, err => {
-					onUnexpectedError(err);
+					onUnexpectedExternalError(err);
 				});
 			}
+			return undefined;
 		};
 	})).then(values => {
 		return values[0];
@@ -47,6 +59,7 @@ CommonEditorRegistry.registerDefaultLanguageCommand('_executeDocumentHighlights'
 class WordHighlighter {
 
 	private editor: editorCommon.ICommonCodeEditor;
+	private occurrencesHighlight: boolean;
 	private model: editorCommon.IModel;
 	private _lastWordRange: Range;
 	private _decorationIds: string[];
@@ -62,6 +75,7 @@ class WordHighlighter {
 
 	constructor(editor: editorCommon.ICommonCodeEditor) {
 		this.editor = editor;
+		this.occurrencesHighlight = this.editor.getConfiguration().contribInfo.occurrencesHighlight;
 		this.model = this.editor.getModel();
 		this.toUnhook = [];
 		this.toUnhook.push(editor.onDidChangeCursorPosition((e: editorCommon.ICursorPositionChangedEvent) => {
@@ -73,6 +87,13 @@ class WordHighlighter {
 		}));
 		this.toUnhook.push(editor.onDidChangeModelContent((e) => {
 			this._stopAll();
+		}));
+		this.toUnhook.push(editor.onDidChangeConfiguration((e) => {
+			let newValue = this.editor.getConfiguration().contribInfo.occurrencesHighlight;
+			if (this.occurrencesHighlight !== newValue) {
+				this.occurrencesHighlight = newValue;
+				this._stopAll();
+			}
 		}));
 
 		this._lastWordRange = null;
@@ -100,7 +121,7 @@ class WordHighlighter {
 
 		// Cancel any renderDecorationsTimer
 		if (this.renderDecorationsTimer !== -1) {
-			window.clearTimeout(this.renderDecorationsTimer);
+			clearTimeout(this.renderDecorationsTimer);
 			this.renderDecorationsTimer = -1;
 		}
 
@@ -118,6 +139,12 @@ class WordHighlighter {
 	}
 
 	private _onPositionChanged(e: editorCommon.ICursorPositionChangedEvent): void {
+
+		// disabled
+		if (!this.occurrencesHighlight) {
+			this._stopAll();
+			return;
+		}
 
 		// ignore typing & other
 		if (e.reason !== editorCommon.CursorChangeReason.Explicit) {
@@ -190,7 +217,7 @@ class WordHighlighter {
 			if (this.workerRequestCompleted && this.renderDecorationsTimer !== -1) {
 				// case b)
 				// Delay the firing of renderDecorationsTimer by an extra 250 ms
-				window.clearTimeout(this.renderDecorationsTimer);
+				clearTimeout(this.renderDecorationsTimer);
 				this.renderDecorationsTimer = -1;
 				this._beginRenderDecorations();
 			}
@@ -226,7 +253,7 @@ class WordHighlighter {
 			this.renderDecorations();
 		} else {
 			// Asyncrhonous
-			this.renderDecorationsTimer = window.setTimeout(() => {
+			this.renderDecorationsTimer = setTimeout(() => {
 				this.renderDecorations();
 			}, (minimumRenderTime - currentTime));
 		}
@@ -289,4 +316,44 @@ class WordHighlighterContribution implements editorCommon.IEditorContribution {
 	public dispose(): void {
 		this.wordHighligher.dispose();
 	}
+}
+
+registerThemingParticipant((theme: ITheme, collector: ICssStyleCollector) => {
+	let selectionHighlightColor = getSelectionHighlightColor(theme);
+	if (selectionHighlightColor) {
+		addBackgroundColorRule(theme, '.focused .selectionHighlight', selectionHighlightColor, collector);
+		addBackgroundColorRule(theme, '.selectionHighlight', selectionHighlightColor.transparent(0.5), collector);
+	}
+
+	addBackgroundColorRule(theme, '.wordHighlight', theme.getColor(editorWordHighlight), collector);
+	addBackgroundColorRule(theme, '.wordHighlightStrong', theme.getColor(editorWordHighlightString), collector);
+
+});
+
+function getSelectionHighlightColor(theme: ITheme) {
+	if (theme.isDefault(editorSelectionHighlightColor) && (!theme.isDefault(editorBackground) || !theme.isDefault(editorSelection))) {
+		let selection = theme.getColor(editorSelection);
+		let background = theme.getColor(editorBackground);
+		if (selection && background) {
+			return deriveLessProminentColor(selection, background);
+		}
+	}
+	return theme.getColor(editorSelectionHighlightColor);
+}
+
+function addBackgroundColorRule(theme: ITheme, selector: string, color: Color, collector: ICssStyleCollector): void {
+	if (color) {
+		collector.addRule(`.monaco-editor.${theme.selector} ${selector} { background-color: ${color}; }`);
+	}
+}
+
+function deriveLessProminentColor(from: Color, backgroundColor: Color): Color {
+	let contrast = from.getContrast(backgroundColor);
+	if (contrast < 1.7 || contrast > 4.5) {
+		return null;
+	}
+	if (from.isDarkerThan(backgroundColor)) {
+		return Color.getLighterColor(from, backgroundColor, 0.4);
+	}
+	return Color.getDarkerColor(from, backgroundColor, 0.4);
 }

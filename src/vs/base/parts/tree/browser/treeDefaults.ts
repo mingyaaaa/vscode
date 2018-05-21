@@ -4,70 +4,17 @@
  *--------------------------------------------------------------------------------------------*/
 'use strict';
 
-import nls = require('vs/nls');
+import * as nls from 'vs/nls';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { Action } from 'vs/base/common/actions';
-import platform = require('vs/base/common/platform');
-import touch = require('vs/base/browser/touch');
-import errors = require('vs/base/common/errors');
-import dom = require('vs/base/browser/dom');
-import mouse = require('vs/base/browser/mouseEvent');
+import * as platform from 'vs/base/common/platform';
+import * as touch from 'vs/base/browser/touch';
+import * as errors from 'vs/base/common/errors';
+import * as dom from 'vs/base/browser/dom';
+import * as mouse from 'vs/base/browser/mouseEvent';
 import { IKeyboardEvent } from 'vs/base/browser/keyboardEvent';
-import _ = require('vs/base/parts/tree/browser/tree');
-import { KeyCode, KeyMod, Keybinding, createKeybinding, SimpleKeybinding } from 'vs/base/common/keyCodes';
-
-export interface ILegacyTemplateData {
-	root: HTMLElement;
-	element: any;
-	previousCleanupFn: _.IElementCallback;
-}
-
-export class LegacyRenderer implements _.IRenderer {
-
-	public getHeight(tree: _.ITree, element: any): number {
-		return 20;
-	}
-
-	public getTemplateId(tree: _.ITree, element: any): string {
-		return 'legacy';
-	}
-
-	public renderTemplate(tree: _.ITree, templateId: string, container: HTMLElement): any {
-		return <ILegacyTemplateData>{
-			root: container,
-			element: null,
-			previousCleanupFn: null
-		};
-	}
-
-	public renderElement(tree: _.ITree, element: any, templateId: string, templateData: ILegacyTemplateData): void {
-		if (templateData.previousCleanupFn) {
-			templateData.previousCleanupFn(tree, templateData.element);
-		}
-
-		while (templateData.root && templateData.root.firstChild) {
-			templateData.root.removeChild(templateData.root.firstChild);
-		}
-
-		templateData.element = element;
-		templateData.previousCleanupFn = this.render(tree, element, templateData.root);
-	}
-
-	public disposeTemplate(tree: _.ITree, templateId: string, templateData: any): void {
-		if (templateData.previousCleanupFn) {
-			templateData.previousCleanupFn(tree, templateData.element);
-		}
-
-		templateData.root = null;
-		templateData.element = null;
-		templateData.previousCleanupFn = null;
-	}
-
-	protected render(tree: _.ITree, element: any, container: HTMLElement, previousCleanupFn?: _.IElementCallback): _.IElementCallback {
-		container.textContent = '' + element;
-		return null;
-	}
-}
+import * as _ from 'vs/base/parts/tree/browser/tree';
+import { KeyCode, KeyMod, Keybinding, createKeybinding, SimpleKeybinding, createSimpleKeybinding } from 'vs/base/common/keyCodes';
 
 export interface IKeyBindingCallback {
 	(tree: _.ITree, event: IKeyboardEvent): void;
@@ -91,8 +38,14 @@ export enum ClickBehavior {
 	ON_MOUSE_UP
 }
 
+export enum OpenMode {
+	SINGLE_CLICK,
+	DOUBLE_CLICK
+}
+
 export interface IControllerOptions {
 	clickBehavior?: ClickBehavior;
+	openMode?: OpenMode;
 	keyboardSupport?: boolean;
 }
 
@@ -109,7 +62,17 @@ export class KeybindingDispatcher {
 		this._arr = [];
 	}
 
-	public set(keybinding: number, callback: IKeyBindingCallback) {
+	public has(keybinding: KeyCode): boolean {
+		let target = createSimpleKeybinding(keybinding, platform.OS);
+		for (const a of this._arr) {
+			if (target.equals(a.keybinding)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	public set(keybinding: KeyCode, callback: IKeyBindingCallback) {
 		this._arr.push({
 			keybinding: createKeybinding(keybinding, platform.OS),
 			callback: callback
@@ -135,7 +98,7 @@ export class DefaultController implements _.IController {
 
 	private options: IControllerOptions;
 
-	constructor(options: IControllerOptions = { clickBehavior: ClickBehavior.ON_MOUSE_UP, keyboardSupport: true }) {
+	constructor(options: IControllerOptions = { clickBehavior: ClickBehavior.ON_MOUSE_DOWN, keyboardSupport: true, openMode: OpenMode.SINGLE_CLICK }) {
 		this.options = options;
 
 		this.downKeyBindingDispatcher = new KeybindingDispatcher();
@@ -184,7 +147,7 @@ export class DefaultController implements _.IController {
 	}
 
 	public onClick(tree: _.ITree, element: any, event: mouse.IMouseEvent): boolean {
-		var isMac = platform.isMacintosh;
+		const isMac = platform.isMacintosh;
 
 		// A Ctrl click on the Mac is a context menu event
 		if (isMac && event.ctrlKey) {
@@ -205,30 +168,52 @@ export class DefaultController implements _.IController {
 	}
 
 	protected onLeftClick(tree: _.ITree, element: any, eventish: ICancelableEvent, origin: string = 'mouse'): boolean {
-		var payload = { origin: origin, originalEvent: eventish };
+		const payload = { origin: origin, originalEvent: eventish };
+		const event = <mouse.IMouseEvent>eventish;
+		const isDoubleClick = (origin === 'mouse' && event.detail === 2);
 
 		if (tree.getInput() === element) {
 			tree.clearFocus(payload);
 			tree.clearSelection(payload);
 		} else {
-			var isMouseDown = eventish && (<mouse.IMouseEvent>eventish).browserEvent && (<mouse.IMouseEvent>eventish).browserEvent.type === 'mousedown';
+			const isMouseDown = eventish && event.browserEvent && event.browserEvent.type === 'mousedown';
 			if (!isMouseDown) {
 				eventish.preventDefault(); // we cannot preventDefault onMouseDown because this would break DND otherwise
 			}
 			eventish.stopPropagation();
 
-			tree.DOMFocus();
+			tree.domFocus();
 			tree.setSelection([element], payload);
 			tree.setFocus(element, payload);
 
-			if (tree.isExpanded(element)) {
-				tree.collapse(element).done(null, errors.onUnexpectedError);
-			} else {
-				tree.expand(element).done(null, errors.onUnexpectedError);
+			if (this.openOnSingleClick || isDoubleClick || this.isClickOnTwistie(event)) {
+				if (tree.isExpanded(element)) {
+					tree.collapse(element).done(null, errors.onUnexpectedError);
+				} else {
+					tree.expand(element).done(null, errors.onUnexpectedError);
+				}
 			}
 		}
 
 		return true;
+	}
+
+	protected setOpenMode(openMode: OpenMode) {
+		this.options.openMode = openMode;
+	}
+
+	protected get openOnSingleClick(): boolean {
+		return this.options.openMode === OpenMode.SINGLE_CLICK;
+	}
+
+	protected isClickOnTwistie(event: mouse.IMouseEvent): boolean {
+		const target = event.target as HTMLElement;
+
+		// There is no way to find out if the ::before element is clicked where
+		// the twistie is drawn, but the <div class="content"> element in the
+		// tree item is the only thing we get back as target when the user clicks
+		// on the twistie.
+		return target && dom.hasClass(target, 'content') && dom.hasClass(target.parentElement, 'monaco-tree-row');
 	}
 
 	public onContextMenu(tree: _.ITree, element: any, event: _.ContextMenuEvent): boolean {
@@ -246,7 +231,7 @@ export class DefaultController implements _.IController {
 	}
 
 	public onTap(tree: _.ITree, element: any, event: touch.GestureEvent): boolean {
-		var target = <HTMLElement>event.initialTarget;
+		const target = <HTMLElement>event.initialTarget;
 
 		if (target && target.tagName && target.tagName.toLowerCase() === 'input') {
 			return false; // Ignore event if target is a form input field (avoids browser specific issues)
@@ -264,7 +249,7 @@ export class DefaultController implements _.IController {
 	}
 
 	private onKey(bindings: KeybindingDispatcher, tree: _.ITree, event: IKeyboardEvent): boolean {
-		var handler = bindings.dispatch(event.toKeybinding());
+		const handler = bindings.dispatch(event.toKeybinding());
 		if (handler) {
 			if (handler(tree, event)) {
 				event.preventDefault();
@@ -276,7 +261,7 @@ export class DefaultController implements _.IController {
 	}
 
 	protected onUp(tree: _.ITree, event: IKeyboardEvent): boolean {
-		var payload = { origin: 'keyboard', originalEvent: event };
+		const payload = { origin: 'keyboard', originalEvent: event };
 
 		if (tree.getHighlight()) {
 			tree.clearHighlight(payload);
@@ -288,7 +273,7 @@ export class DefaultController implements _.IController {
 	}
 
 	protected onPageUp(tree: _.ITree, event: IKeyboardEvent): boolean {
-		var payload = { origin: 'keyboard', originalEvent: event };
+		const payload = { origin: 'keyboard', originalEvent: event };
 
 		if (tree.getHighlight()) {
 			tree.clearHighlight(payload);
@@ -300,7 +285,7 @@ export class DefaultController implements _.IController {
 	}
 
 	protected onDown(tree: _.ITree, event: IKeyboardEvent): boolean {
-		var payload = { origin: 'keyboard', originalEvent: event };
+		const payload = { origin: 'keyboard', originalEvent: event };
 
 		if (tree.getHighlight()) {
 			tree.clearHighlight(payload);
@@ -312,7 +297,7 @@ export class DefaultController implements _.IController {
 	}
 
 	protected onPageDown(tree: _.ITree, event: IKeyboardEvent): boolean {
-		var payload = { origin: 'keyboard', originalEvent: event };
+		const payload = { origin: 'keyboard', originalEvent: event };
 
 		if (tree.getHighlight()) {
 			tree.clearHighlight(payload);
@@ -324,7 +309,7 @@ export class DefaultController implements _.IController {
 	}
 
 	protected onHome(tree: _.ITree, event: IKeyboardEvent): boolean {
-		var payload = { origin: 'keyboard', originalEvent: event };
+		const payload = { origin: 'keyboard', originalEvent: event };
 
 		if (tree.getHighlight()) {
 			tree.clearHighlight(payload);
@@ -336,7 +321,7 @@ export class DefaultController implements _.IController {
 	}
 
 	protected onEnd(tree: _.ITree, event: IKeyboardEvent): boolean {
-		var payload = { origin: 'keyboard', originalEvent: event };
+		const payload = { origin: 'keyboard', originalEvent: event };
 
 		if (tree.getHighlight()) {
 			tree.clearHighlight(payload);
@@ -348,12 +333,12 @@ export class DefaultController implements _.IController {
 	}
 
 	protected onLeft(tree: _.ITree, event: IKeyboardEvent): boolean {
-		var payload = { origin: 'keyboard', originalEvent: event };
+		const payload = { origin: 'keyboard', originalEvent: event };
 
 		if (tree.getHighlight()) {
 			tree.clearHighlight(payload);
 		} else {
-			var focus = tree.getFocus();
+			const focus = tree.getFocus();
 			tree.collapse(focus).then(didCollapse => {
 				if (focus && !didCollapse) {
 					tree.focusParent(payload);
@@ -366,12 +351,12 @@ export class DefaultController implements _.IController {
 	}
 
 	protected onRight(tree: _.ITree, event: IKeyboardEvent): boolean {
-		var payload = { origin: 'keyboard', originalEvent: event };
+		const payload = { origin: 'keyboard', originalEvent: event };
 
 		if (tree.getHighlight()) {
 			tree.clearHighlight(payload);
 		} else {
-			var focus = tree.getFocus();
+			const focus = tree.getFocus();
 			tree.expand(focus).then(didExpand => {
 				if (focus && !didExpand) {
 					tree.focusFirstChild(payload);
@@ -384,12 +369,12 @@ export class DefaultController implements _.IController {
 	}
 
 	protected onEnter(tree: _.ITree, event: IKeyboardEvent): boolean {
-		var payload = { origin: 'keyboard', originalEvent: event };
+		const payload = { origin: 'keyboard', originalEvent: event };
 
 		if (tree.getHighlight()) {
 			return false;
 		}
-		var focus = tree.getFocus();
+		const focus = tree.getFocus();
 		if (focus) {
 			tree.setSelection([focus], payload);
 		}
@@ -400,7 +385,7 @@ export class DefaultController implements _.IController {
 		if (tree.getHighlight()) {
 			return false;
 		}
-		var focus = tree.getFocus();
+		const focus = tree.getFocus();
 		if (focus) {
 			tree.toggleExpansion(focus);
 		}
@@ -408,7 +393,7 @@ export class DefaultController implements _.IController {
 	}
 
 	protected onEscape(tree: _.ITree, event: IKeyboardEvent): boolean {
-		var payload = { origin: 'keyboard', originalEvent: event };
+		const payload = { origin: 'keyboard', originalEvent: event };
 
 		if (tree.getHighlight()) {
 			tree.clearHighlight(payload);
@@ -469,6 +454,87 @@ export class DefaultAccessibilityProvider implements _.IAccessibilityProvider {
 	}
 }
 
+export class DefaultTreestyler implements _.ITreeStyler {
+
+	constructor(private styleElement: HTMLStyleElement, private selectorSuffix?: string) { }
+
+	style(styles: _.ITreeStyles): void {
+		const suffix = this.selectorSuffix ? `.${this.selectorSuffix}` : '';
+		const content: string[] = [];
+
+		if (styles.listFocusBackground) {
+			content.push(`.monaco-tree${suffix}.focused .monaco-tree-rows > .monaco-tree-row.focused:not(.highlighted) { background-color: ${styles.listFocusBackground}; }`);
+		}
+
+		if (styles.listFocusForeground) {
+			content.push(`.monaco-tree${suffix}.focused .monaco-tree-rows > .monaco-tree-row.focused:not(.highlighted) { color: ${styles.listFocusForeground}; }`);
+		}
+
+		if (styles.listActiveSelectionBackground) {
+			content.push(`.monaco-tree${suffix}.focused .monaco-tree-rows > .monaco-tree-row.selected:not(.highlighted) { background-color: ${styles.listActiveSelectionBackground}; }`);
+		}
+
+		if (styles.listActiveSelectionForeground) {
+			content.push(`.monaco-tree${suffix}.focused .monaco-tree-rows > .monaco-tree-row.selected:not(.highlighted) { color: ${styles.listActiveSelectionForeground}; }`);
+		}
+
+		if (styles.listFocusAndSelectionBackground) {
+			content.push(`
+				.monaco-tree-drag-image,
+				.monaco-tree${suffix}.focused .monaco-tree-rows > .monaco-tree-row.focused.selected:not(.highlighted) { background-color: ${styles.listFocusAndSelectionBackground}; }
+			`);
+		}
+
+		if (styles.listFocusAndSelectionForeground) {
+			content.push(`
+				.monaco-tree-drag-image,
+				.monaco-tree${suffix}.focused .monaco-tree-rows > .monaco-tree-row.focused.selected:not(.highlighted) { color: ${styles.listFocusAndSelectionForeground}; }
+			`);
+		}
+
+		if (styles.listInactiveSelectionBackground) {
+			content.push(`.monaco-tree${suffix} .monaco-tree-rows > .monaco-tree-row.selected:not(.highlighted) { background-color: ${styles.listInactiveSelectionBackground}; }`);
+		}
+
+		if (styles.listInactiveSelectionForeground) {
+			content.push(`.monaco-tree${suffix} .monaco-tree-rows > .monaco-tree-row.selected:not(.highlighted) { color: ${styles.listInactiveSelectionForeground}; }`);
+		}
+
+		if (styles.listHoverBackground) {
+			content.push(`.monaco-tree${suffix} .monaco-tree-rows > .monaco-tree-row:hover:not(.highlighted):not(.selected):not(.focused) { background-color: ${styles.listHoverBackground}; }`);
+		}
+
+		if (styles.listHoverForeground) {
+			content.push(`.monaco-tree${suffix} .monaco-tree-rows > .monaco-tree-row:hover:not(.highlighted):not(.selected):not(.focused) { color: ${styles.listHoverForeground}; }`);
+		}
+
+		if (styles.listDropBackground) {
+			content.push(`
+				.monaco-tree${suffix} .monaco-tree-wrapper.drop-target,
+				.monaco-tree${suffix} .monaco-tree-rows > .monaco-tree-row.drop-target { background-color: ${styles.listDropBackground} !important; color: inherit !important; }
+			`);
+		}
+
+		if (styles.listFocusOutline) {
+			content.push(`
+				.monaco-tree-drag-image																															{ border: 1px solid ${styles.listFocusOutline}; background: #000; }
+				.monaco-tree${suffix} .monaco-tree-rows > .monaco-tree-row 														{ border: 1px solid transparent; }
+				.monaco-tree${suffix}.focused .monaco-tree-rows > .monaco-tree-row.focused:not(.highlighted) 						{ border: 1px dotted ${styles.listFocusOutline}; }
+				.monaco-tree${suffix}.focused .monaco-tree-rows > .monaco-tree-row.selected:not(.highlighted) 						{ border: 1px solid ${styles.listFocusOutline}; }
+				.monaco-tree${suffix} .monaco-tree-rows > .monaco-tree-row.selected:not(.highlighted)  							{ border: 1px solid ${styles.listFocusOutline}; }
+				.monaco-tree${suffix} .monaco-tree-rows > .monaco-tree-row:hover:not(.highlighted):not(.selected):not(.focused)  	{ border: 1px dashed ${styles.listFocusOutline}; }
+				.monaco-tree${suffix} .monaco-tree-wrapper.drop-target,
+				.monaco-tree${suffix} .monaco-tree-rows > .monaco-tree-row.drop-target												{ border: 1px dashed ${styles.listFocusOutline}; }
+			`);
+		}
+
+		const newStyles = content.join('\n');
+		if (newStyles !== this.styleElement.innerHTML) {
+			this.styleElement.innerHTML = newStyles;
+		}
+	}
+}
+
 export class CollapseAllAction extends Action {
 
 	constructor(private viewer: _.ITree, enabled: boolean) {
@@ -483,7 +549,7 @@ export class CollapseAllAction extends Action {
 		this.viewer.collapseAll();
 		this.viewer.clearSelection();
 		this.viewer.clearFocus();
-		this.viewer.DOMFocus();
+		this.viewer.domFocus();
 		this.viewer.focusFirst();
 
 		return TPromise.as(null);

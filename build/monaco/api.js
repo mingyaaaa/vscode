@@ -1,12 +1,13 @@
+"use strict";
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-"use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var fs = require("fs");
 var ts = require("typescript");
 var path = require("path");
+var tsfmt = require('../../tsfmt.json');
 var util = require('gulp-util');
 function log(message) {
     var rest = [];
@@ -161,19 +162,16 @@ function getMassagedTopLevelDeclarationText(sourceFile, declaration) {
     return result;
 }
 function format(text) {
-    var options = getDefaultOptions();
     // Parse the source text
     var sourceFile = ts.createSourceFile('file.ts', text, ts.ScriptTarget.Latest, /*setParentPointers*/ true);
     // Get the formatting edits on the input sources
-    var edits = ts.formatting.formatDocument(sourceFile, getRuleProvider(options), options);
+    var edits = ts.formatting.formatDocument(sourceFile, getRuleProvider(tsfmt), tsfmt);
     // Apply the edits on the input code
     return applyEdits(text, edits);
     function getRuleProvider(options) {
         // Share this between multiple formatters using the same options.
         // This represents the bulk of the space the formatter uses.
-        var ruleProvider = new ts.formatting.RulesProvider();
-        ruleProvider.ensureUpToDate(options);
-        return ruleProvider;
+        return ts.formatting.getFormatContext(options);
     }
     function applyEdits(text, edits) {
         // Apply edits in reverse on the existing text
@@ -185,25 +183,6 @@ function format(text) {
             result = head + change.newText + tail;
         }
         return result;
-    }
-    function getDefaultOptions() {
-        return {
-            indentSize: 4,
-            tabSize: 4,
-            newLineCharacter: '\r\n',
-            convertTabsToSpaces: true,
-            indentStyle: ts.IndentStyle.Block,
-            insertSpaceAfterCommaDelimiter: true,
-            insertSpaceAfterSemicolonInForStatements: true,
-            insertSpaceBeforeAndAfterBinaryOperators: true,
-            insertSpaceAfterKeywordsInControlFlowStatements: true,
-            insertSpaceAfterFunctionKeywordForAnonymousFunctions: false,
-            insertSpaceAfterOpeningAndBeforeClosingNonemptyParenthesis: false,
-            insertSpaceAfterOpeningAndBeforeClosingNonemptyBrackets: false,
-            insertSpaceAfterOpeningAndBeforeClosingTemplateStringBraces: true,
-            placeOpenBraceOnNewLineForFunctions: false,
-            placeOpenBraceOnNewLineForControlBlocks: false,
-        };
     }
 }
 function createReplacer(data) {
@@ -229,7 +208,8 @@ function createReplacer(data) {
     };
 }
 function generateDeclarationFile(out, inputFiles, recipe) {
-    var lines = recipe.split(/\r\n|\n|\r/);
+    var endl = /\r\n/.test(recipe) ? '\r\n' : '\n';
+    var lines = recipe.split(endl);
     var result = [];
     lines.forEach(function (line) {
         var m1 = line.match(/^\s*#include\(([^;)]*)(;[^)]*)?\)\:(.*)$/);
@@ -297,12 +277,11 @@ function generateDeclarationFile(out, inputFiles, recipe) {
         }
         result.push(line);
     });
-    var resultTxt = result.join('\n');
+    var resultTxt = result.join(endl);
     resultTxt = resultTxt.replace(/\bURI\b/g, 'Uri');
     resultTxt = resultTxt.replace(/\bEvent</g, 'IEvent<');
     resultTxt = resultTxt.replace(/\bTPromise</g, 'Promise<');
     resultTxt = format(resultTxt);
-    resultTxt = resultTxt.replace(/\r\n/g, '\n');
     return resultTxt;
 }
 function getFilesToWatch(out) {
@@ -333,10 +312,13 @@ function run(out, inputFiles) {
     var result = generateDeclarationFile(out, inputFiles, recipe);
     var currentContent = fs.readFileSync(DECLARATION_PATH).toString();
     log('Finished monaco.d.ts generation');
+    var one = currentContent.replace(/\r\n/gm, '\n');
+    var other = result.replace(/\r\n/gm, '\n');
+    var isTheSame = one === other;
     return {
         content: result,
         filePath: DECLARATION_PATH,
-        isTheSame: currentContent === result
+        isTheSame: isTheSame
     };
 }
 exports.run = run;

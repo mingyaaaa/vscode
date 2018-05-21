@@ -31,6 +31,12 @@ export interface IProgressRunner {
 	done(): void;
 }
 
+export const emptyProgressRunner: IProgressRunner = Object.freeze({
+	total() { },
+	worked() { },
+	done() { }
+});
+
 export interface IProgress<T> {
 	report(item: T): void;
 }
@@ -39,10 +45,10 @@ export const emptyProgress: IProgress<any> = Object.freeze({ report() { } });
 
 export class Progress<T> implements IProgress<T> {
 
-	private _callback: () => void;
+	private _callback: (data: T) => void;
 	private _value: T;
 
-	constructor(callback: () => void) {
+	constructor(callback: (data: T) => void) {
 		this._callback = callback;
 	}
 
@@ -52,8 +58,29 @@ export class Progress<T> implements IProgress<T> {
 
 	report(item: T) {
 		this._value = item;
-		this._callback();
+		this._callback(this._value);
 	}
+}
+
+export enum ProgressLocation {
+	Explorer = 1,
+	Scm = 3,
+	Extensions = 5,
+	Window = 10,
+	Notification = 15
+}
+
+export interface IProgressOptions {
+	location: ProgressLocation;
+	title?: string;
+	source?: string;
+	total?: number;
+	cancellable?: boolean;
+}
+
+export interface IProgressStep {
+	message?: string;
+	increment?: number;
 }
 
 export const IProgressService2 = createDecorator<IProgressService2>('progressService2');
@@ -62,7 +89,5 @@ export interface IProgressService2 {
 
 	_serviceBrand: any;
 
-	withWindowProgress(title: string, task: (progress: IProgress<string>) => TPromise<any>): void;
-
-	withViewletProgress(viewletId: string, task: (progress: IProgress<number>) => TPromise<any>): void;
+	withProgress<P extends Thenable<R>, R=any>(options: IProgressOptions, task: (progress: IProgress<IProgressStep>) => P, onDidCancel?: () => void): P;
 }

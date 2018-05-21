@@ -4,11 +4,10 @@
  *--------------------------------------------------------------------------------------------*/
 'use strict';
 
-import { escape } from 'vs/base/common/strings';
 import { IDisposable } from 'vs/base/common/lifecycle';
 import * as dom from 'vs/base/browser/dom';
 import * as objects from 'vs/base/common/objects';
-import { expand as expandOcticons } from 'vs/base/browser/ui/octiconLabel/octiconLabel';
+import { renderOcticons } from 'vs/base/browser/ui/octiconLabel/octiconLabel';
 
 export interface IHighlight {
 	start: number;
@@ -19,6 +18,7 @@ export class HighlightedLabel implements IDisposable {
 
 	private domNode: HTMLElement;
 	private text: string;
+	private title: string;
 	private highlights: IHighlight[];
 	private didEverRender: boolean;
 
@@ -33,11 +33,14 @@ export class HighlightedLabel implements IDisposable {
 		return this.domNode;
 	}
 
-	set(text: string, highlights: IHighlight[] = []) {
+	set(text: string, highlights: IHighlight[] = [], title?: string) {
 		if (!text) {
 			text = '';
 		}
-		if (this.didEverRender && this.text === text && objects.equals(this.highlights, highlights)) {
+		if (!title) {
+			title = text;
+		}
+		if (this.didEverRender && this.text === text && this.title === title && objects.equals(this.highlights, highlights)) {
 			return;
 		}
 
@@ -46,6 +49,7 @@ export class HighlightedLabel implements IDisposable {
 		}
 
 		this.text = text;
+		this.title = title || text;
 		this.highlights = highlights;
 		this.render();
 	}
@@ -64,23 +68,24 @@ export class HighlightedLabel implements IDisposable {
 			}
 			if (pos < highlight.start) {
 				htmlContent.push('<span>');
-				htmlContent.push(expandOcticons(escape(this.text.substring(pos, highlight.start))));
+				htmlContent.push(renderOcticons(this.text.substring(pos, highlight.start)));
 				htmlContent.push('</span>');
 				pos = highlight.end;
 			}
 			htmlContent.push('<span class="highlight">');
-			htmlContent.push(expandOcticons(escape(this.text.substring(highlight.start, highlight.end))));
+			htmlContent.push(renderOcticons(this.text.substring(highlight.start, highlight.end)));
 			htmlContent.push('</span>');
 			pos = highlight.end;
 		}
 
 		if (pos < this.text.length) {
 			htmlContent.push('<span>');
-			htmlContent.push(expandOcticons(escape(this.text.substring(pos))));
+			htmlContent.push(renderOcticons(this.text.substring(pos)));
 			htmlContent.push('</span>');
 		}
 
 		this.domNode.innerHTML = htmlContent.join('');
+		this.domNode.title = this.title;
 		this.didEverRender = true;
 	}
 

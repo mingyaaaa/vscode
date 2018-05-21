@@ -6,12 +6,11 @@
 'use strict';
 
 import Uri from 'vs/base/common/uri';
-import errors = require('vs/base/common/errors');
+import * as errors from 'vs/base/common/errors';
 import { IBackupFileService } from 'vs/workbench/services/backup/common/backup';
 import { IDisposable, dispose } from 'vs/base/common/lifecycle';
 import { ITextFileService, TextFileModelChangeEvent, StateChange } from 'vs/workbench/services/textfile/common/textfiles';
 import { IUntitledEditorService } from 'vs/workbench/services/untitled/common/untitledEditorService';
-import { IEnvironmentService } from 'vs/platform/environment/common/environment';
 import { IWorkbenchContribution } from 'vs/workbench/common/contributions';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { IFilesConfiguration, AutoSaveConfiguration, CONTENT_CHANGE_EVENT_BUFFER_DELAY } from 'vs/platform/files/common/files';
@@ -29,7 +28,6 @@ export class BackupModelTracker implements IWorkbenchContribution {
 		@IBackupFileService private backupFileService: IBackupFileService,
 		@ITextFileService private textFileService: ITextFileService,
 		@IUntitledEditorService private untitledEditorService: IUntitledEditorService,
-		@IEnvironmentService private environmentService: IEnvironmentService,
 		@IConfigurationService private configurationService: IConfigurationService
 	) {
 		this.toDispose = [];
@@ -38,7 +36,7 @@ export class BackupModelTracker implements IWorkbenchContribution {
 	}
 
 	private registerListeners() {
-		if (this.environmentService.isExtensionDevelopment) {
+		if (!this.backupFileService.backupEnabled) {
 			return;
 		}
 
@@ -52,7 +50,7 @@ export class BackupModelTracker implements IWorkbenchContribution {
 		this.toDispose.push(this.untitledEditorService.onDidDisposeModel((e) => this.discardBackup(e)));
 
 		// Listen to config changes
-		this.toDispose.push(this.configurationService.onDidUpdateConfiguration(e => this.onConfigurationChange(e.config)));
+		this.toDispose.push(this.configurationService.onDidChangeConfiguration(e => this.onConfigurationChange(this.configurationService.getValue<IFilesConfiguration>())));
 	}
 
 	private onConfigurationChange(configuration: IFilesConfiguration): void {
@@ -74,15 +72,14 @@ export class BackupModelTracker implements IWorkbenchContribution {
 			// Do not backup when auto save after delay is configured
 			if (!this.configuredAutoSaveAfterDelay) {
 				const model = this.textFileService.models.get(event.resource);
-				this.backupFileService.backupResource(model.getResource(), model.getValue(), model.getVersionId()).done(null, errors.onUnexpectedError);
+				this.backupFileService.backupResource(model.getResource(), model.createSnapshot(), model.getVersionId()).done(null, errors.onUnexpectedError);
 			}
 		}
 	}
 
 	private onUntitledModelChanged(resource: Uri): void {
-		const input = this.untitledEditorService.get(resource);
-		if (input.isDirty()) {
-			input.resolve().then(model => this.backupFileService.backupResource(resource, model.getValue(), model.getVersionId())).done(null, errors.onUnexpectedError);
+		if (this.untitledEditorService.isDirty(resource)) {
+			this.untitledEditorService.loadOrCreate({ resource }).then(model => this.backupFileService.backupResource(resource, model.createSnapshot(), model.getVersionId())).done(null, errors.onUnexpectedError);
 		} else {
 			this.discardBackup(resource);
 		}
@@ -94,9 +91,5 @@ export class BackupModelTracker implements IWorkbenchContribution {
 
 	public dispose(): void {
 		this.toDispose = dispose(this.toDispose);
-	}
-
-	public getId(): string {
-		return 'vs.backup.backupModelTracker';
 	}
 }

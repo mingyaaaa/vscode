@@ -6,26 +6,33 @@
 'use strict';
 
 import { TPromise } from 'vs/base/common/winjs.base';
-import severity from 'vs/base/common/severity';
-import { IAction } from 'vs/base/common/actions';
+import { IAction, IActionRunner, ActionRunner } from 'vs/base/common/actions';
 import { Separator } from 'vs/base/browser/ui/actionbar/actionbar';
-import dom = require('vs/base/browser/dom');
-import { IContextMenuService, IContextMenuDelegate, ContextSubMenu, IEvent } from 'vs/platform/contextview/browser/contextView';
+import * as dom from 'vs/base/browser/dom';
+import { IContextMenuService } from 'vs/platform/contextview/browser/contextView';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
-import { IMessageService } from 'vs/platform/message/common/message';
 import { IKeybindingService } from 'vs/platform/keybinding/common/keybinding';
 
 import { remote, webFrame } from 'electron';
+import { unmnemonicLabel } from 'vs/base/common/labels';
+import { Event, Emitter } from 'vs/base/common/event';
+import { INotificationService } from 'vs/platform/notification/common/notification';
+import { IContextMenuDelegate, ContextSubMenu, IEvent } from 'vs/base/browser/contextmenu';
 
 export class ContextMenuService implements IContextMenuService {
 
 	public _serviceBrand: any;
+	private _onDidContextMenu = new Emitter<void>();
 
 	constructor(
-		@IMessageService private messageService: IMessageService,
+		@INotificationService private notificationService: INotificationService,
 		@ITelemetryService private telemetryService: ITelemetryService,
 		@IKeybindingService private keybindingService: IKeybindingService
 	) {
+	}
+
+	public get onDidContextMenu(): Event<void> {
+		return this._onDidContextMenu.event;
 	}
 
 	public showContextMenu(delegate: IContextMenuDelegate): void {
@@ -46,7 +53,7 @@ export class ContextMenuService implements IContextMenuService {
 					y = elementPosition.top + elementPosition.height;
 				} else {
 					const pos = <{ x: number; y: number; }>anchor;
-					x = pos.x;
+					x = pos.x + 1; /* prevent first item from being selected automatically under mouse */
 					y = pos.y;
 				}
 
@@ -54,7 +61,8 @@ export class ContextMenuService implements IContextMenuService {
 				x *= zoom;
 				y *= zoom;
 
-				menu.popup(remote.getCurrentWindow(), Math.floor(x), Math.floor(y));
+				menu.popup(remote.getCurrentWindow(), { x: Math.floor(x), y: Math.floor(y), positioningItem: delegate.autoSelectFirstItem ? 0 : void 0 });
+				this._onDidContextMenu.fire();
 				if (delegate.onHide) {
 					delegate.onHide(undefined);
 				}
@@ -64,6 +72,7 @@ export class ContextMenuService implements IContextMenuService {
 
 	private createMenu(delegate: IContextMenuDelegate, entries: (IAction | ContextSubMenu)[]): Electron.Menu {
 		const menu = new remote.Menu();
+		const actionRunner = delegate.actionRunner || new ActionRunner();
 
 		entries.forEach(e => {
 			if (e instanceof Separator) {
@@ -71,22 +80,22 @@ export class ContextMenuService implements IContextMenuService {
 			} else if (e instanceof ContextSubMenu) {
 				const submenu = new remote.MenuItem({
 					submenu: this.createMenu(delegate, e.entries),
-					label: e.label
+					label: unmnemonicLabel(e.label)
 				});
 
 				menu.append(submenu);
 			} else {
-				const options: Electron.MenuItemOptions = {
-					label: e.label,
+				const options: Electron.MenuItemConstructorOptions = {
+					label: unmnemonicLabel(e.label),
 					checked: !!e.checked || !!e.radio,
 					type: !!e.checked ? 'checkbox' : !!e.radio ? 'radio' : void 0,
 					enabled: !!e.enabled,
 					click: (menuItem, win, event) => {
-						this.runAction(e, delegate, event);
+						this.runAction(actionRunner, e, delegate, event);
 					}
 				};
 
-				const keybinding = !!delegate.getKeyBinding ? delegate.getKeyBinding(e) : undefined;
+				const keybinding = !!delegate.getKeyBinding ? delegate.getKeyBinding(e) : this.keybindingService.lookupKeybinding(e.id);
 				if (keybinding) {
 					const electronAccelerator = keybinding.getElectronAccelerator();
 					if (electronAccelerator) {
@@ -94,7 +103,7 @@ export class ContextMenuService implements IContextMenuService {
 					} else {
 						const label = keybinding.getLabel();
 						if (label) {
-							options.label = `${options.label} (${label})`;
+							options.label = `${options.label} [${label}]`;
 						}
 					}
 				}
@@ -108,12 +117,18 @@ export class ContextMenuService implements IContextMenuService {
 		return menu;
 	}
 
-	private runAction(actionToRun: IAction, delegate: IContextMenuDelegate, event: IEvent): void {
+	private runAction(actionRunner: IActionRunner, actionToRun: IAction, delegate: IContextMenuDelegate, event: IEvent): void {
+		/* __GDPR__
+			"workbenchActionExecuted" : {
+				"id" : { "classification": "SystemMetaData", "purpose": "FeatureInsight" },
+				"from": { "classification": "SystemMetaData", "purpose": "FeatureInsight" }
+			}
+		*/
 		this.telemetryService.publicLog('workbenchActionExecuted', { id: actionToRun.id, from: 'contextMenu' });
 
 		const context = delegate.getActionsContext ? delegate.getActionsContext(event) : event;
-		const res = actionToRun.run(context) || TPromise.as(null);
+		const res = actionRunner.run(actionToRun, context) || TPromise.as(null);
 
-		res.done(null, e => this.messageService.show(severity.Error, e));
+		res.done(null, e => this.notificationService.error(e));
 	}
 }

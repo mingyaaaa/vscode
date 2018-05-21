@@ -7,19 +7,15 @@
 
 import * as path from 'path';
 import * as crypto from 'crypto';
-import pfs = require('vs/base/node/pfs');
-import * as platform from 'vs/base/common/platform';
+import * as pfs from 'vs/base/node/pfs';
 import Uri from 'vs/base/common/uri';
-import { Queue } from 'vs/base/common/async';
-import { IBackupFileService, BACKUP_FILE_UPDATE_OPTIONS } from 'vs/workbench/services/backup/common/backup';
-import { IBackupService } from 'vs/platform/backup/common/backup';
-import { IEnvironmentService } from 'vs/platform/environment/common/environment';
-import { IFileService } from 'vs/platform/files/common/files';
+import { ResourceQueue } from 'vs/base/common/async';
+import { IBackupFileService, BACKUP_FILE_UPDATE_OPTIONS, BACKUP_FILE_RESOLVE_OPTIONS } from 'vs/workbench/services/backup/common/backup';
+import { IFileService, ITextSnapshot } from 'vs/platform/files/common/files';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { readToMatchingString } from 'vs/base/node/stream';
-import { IWindowService } from 'vs/platform/windows/common/windows';
-import { TextSource, IRawTextSource } from 'vs/editor/common/model/textSource';
-import { DefaultEndOfLine } from 'vs/editor/common/editorCommon';
+import { ITextBufferFactory } from 'vs/editor/common/model';
+import { createTextBufferFactoryFromStream } from 'vs/editor/common/model/textModel';
 
 export interface IBackupFilesModel {
 	resolve(backupRoot: string): TPromise<IBackupFilesModel>;
@@ -30,6 +26,28 @@ export interface IBackupFilesModel {
 	remove(resource: Uri): void;
 	count(): number;
 	clear(): void;
+}
+
+export class BackupSnapshot implements ITextSnapshot {
+	private preambleHandled: boolean;
+
+	constructor(private snapshot: ITextSnapshot, private preamble: string) {
+	}
+
+	public read(): string {
+		let value = this.snapshot.read();
+		if (!this.preambleHandled) {
+			this.preambleHandled = true;
+
+			if (typeof value === 'string') {
+				value = this.preamble + value;
+			} else {
+				value = this.preamble;
+			}
+		}
+
+		return value;
+	}
 }
 
 export class BackupFilesModel implements IBackupFilesModel {
@@ -91,46 +109,44 @@ export class BackupFilesModel implements IBackupFilesModel {
 
 export class BackupFileService implements IBackupFileService {
 
-	public _serviceBrand: any;
-
 	private static readonly META_MARKER = '\n';
 
-	private isShuttingDown: boolean;
+	public _serviceBrand: any;
+
 	private backupWorkspacePath: string;
+
+	private isShuttingDown: boolean;
 	private ready: TPromise<IBackupFilesModel>;
-	/**
-	 * Ensure IO operations on individual files are performed in order, this could otherwise lead
-	 * to unexpected behavior when backups are persisted and discarded in the wrong order.
-	 */
-	private ioOperationQueues: { [path: string]: Queue<void> };
+	private ioOperationQueues: ResourceQueue; // queue IO operations to ensure write order
 
 	constructor(
-		@IEnvironmentService private environmentService: IEnvironmentService,
-		@IFileService private fileService: IFileService,
-		@IWindowService windowService: IWindowService,
-		@IBackupService private backupService: IBackupService
+		backupWorkspacePath: string,
+		@IFileService private fileService: IFileService
 	) {
 		this.isShuttingDown = false;
-		this.ready = this.init(windowService.getCurrentWindowId());
-		this.ioOperationQueues = {};
+		this.ioOperationQueues = new ResourceQueue();
+
+		this.initialize(backupWorkspacePath);
 	}
 
-	private get backupEnabled(): boolean {
-		return !this.environmentService.isExtensionDevelopment; // Hot exit is disabled when doing extension development
+	public initialize(backupWorkspacePath: string): void {
+		this.backupWorkspacePath = backupWorkspacePath;
+
+		this.ready = this.init();
 	}
 
-	private init(windowId: number): TPromise<IBackupFilesModel> {
+	public get backupEnabled(): boolean {
+		return !!this.backupWorkspacePath; // Hot exit requires a backup path
+	}
+
+	private init(): TPromise<IBackupFilesModel> {
 		const model = new BackupFilesModel();
 
 		if (!this.backupEnabled) {
 			return TPromise.as(model);
 		}
 
-		return this.backupService.getBackupPath(windowId).then(backupPath => {
-			this.backupWorkspacePath = backupPath;
-
-			return model.resolve(this.backupWorkspacePath);
-		});
+		return model.resolve(this.backupWorkspacePath);
 	}
 
 	public hasBackups(): TPromise<boolean> {
@@ -139,36 +155,29 @@ export class BackupFileService implements IBackupFileService {
 		});
 	}
 
-	public hasBackup(resource: Uri): TPromise<boolean> {
+	public loadBackupResource(resource: Uri): TPromise<Uri> {
 		return this.ready.then(model => {
-			const backupResource = this.getBackupResource(resource);
+			const backupResource = this.toBackupResource(resource);
 			if (!backupResource) {
-				return TPromise.as(false);
+				return void 0;
 			}
 
-			return model.has(backupResource);
+			// Return directly if we have a known backup with that resource
+			if (model.has(backupResource)) {
+				return backupResource;
+			}
+
+			return void 0;
 		});
 	}
 
-	public loadBackupResource(resource: Uri): TPromise<Uri> {
-		return this.ready.then(() => {
-			return this.hasBackup(resource).then(hasBackup => {
-				if (hasBackup) {
-					return this.getBackupResource(resource);
-				}
-
-				return void 0;
-			});
-		});
-	}
-
-	public backupResource(resource: Uri, content: string, versionId?: number): TPromise<void> {
+	public backupResource(resource: Uri, content: ITextSnapshot, versionId?: number): TPromise<void> {
 		if (this.isShuttingDown) {
 			return TPromise.as(void 0);
 		}
 
 		return this.ready.then(model => {
-			const backupResource = this.getBackupResource(resource);
+			const backupResource = this.toBackupResource(resource);
 			if (!backupResource) {
 				return void 0;
 			}
@@ -177,39 +186,26 @@ export class BackupFileService implements IBackupFileService {
 				return void 0; // return early if backup version id matches requested one
 			}
 
-			// Add metadata to top of file
-			content = `${resource.toString()}${BackupFileService.META_MARKER}${content}`;
+			return this.ioOperationQueues.queueFor(backupResource).queue(() => {
+				const preamble = `${resource.toString()}${BackupFileService.META_MARKER}`;
 
-			return this.getResourceIOQueue(backupResource).queue(() => {
-				return this.fileService.updateContent(backupResource, content, BACKUP_FILE_UPDATE_OPTIONS).then(() => model.add(backupResource, versionId));
+				// Update content with value
+				return this.fileService.updateContent(backupResource, new BackupSnapshot(content, preamble), BACKUP_FILE_UPDATE_OPTIONS).then(() => model.add(backupResource, versionId));
 			});
 		});
 	}
 
 	public discardResourceBackup(resource: Uri): TPromise<void> {
 		return this.ready.then(model => {
-			const backupResource = this.getBackupResource(resource);
+			const backupResource = this.toBackupResource(resource);
 			if (!backupResource) {
 				return void 0;
 			}
 
-			return this.getResourceIOQueue(backupResource).queue(() => {
+			return this.ioOperationQueues.queueFor(backupResource).queue(() => {
 				return pfs.del(backupResource.fsPath).then(() => model.remove(backupResource));
 			});
 		});
-	}
-
-	private getResourceIOQueue(resource: Uri) {
-		const key = resource.toString();
-		if (!this.ioOperationQueues[key]) {
-			const queue = new Queue<void>();
-			queue.onFinished(() => {
-				queue.dispose();
-				delete this.ioOperationQueues[key];
-			});
-			this.ioOperationQueues[key] = queue;
-		}
-		return this.ioOperationQueues[key];
 	}
 
 	public discardAllWorkspaceBackups(): TPromise<void> {
@@ -239,12 +235,30 @@ export class BackupFileService implements IBackupFileService {
 		});
 	}
 
-	public parseBackupContent(rawTextSource: IRawTextSource): string {
-		const textSource = TextSource.fromRawTextSource(rawTextSource, DefaultEndOfLine.LF);
-		return textSource.lines.slice(1).join(textSource.EOL); // The first line of a backup text file is the file name
+	public resolveBackupContent(backup: Uri): TPromise<ITextBufferFactory> {
+		return this.fileService.resolveStreamContent(backup, BACKUP_FILE_RESOLVE_OPTIONS).then(content => {
+
+			// Add a filter method to filter out everything until the meta marker
+			let metaFound = false;
+			const metaPreambleFilter = (chunk: string) => {
+				if (!metaFound && chunk) {
+					const metaIndex = chunk.indexOf(BackupFileService.META_MARKER);
+					if (metaIndex === -1) {
+						return ''; // meta not yet found, return empty string
+					}
+
+					metaFound = true;
+					return chunk.substr(metaIndex + 1); // meta found, return everything after
+				}
+
+				return chunk;
+			};
+
+			return createTextBufferFactoryFromStream(content.value, metaPreambleFilter);
+		});
 	}
 
-	protected getBackupResource(resource: Uri): Uri {
+	public toBackupResource(resource: Uri): Uri {
 		if (!this.backupEnabled) {
 			return null;
 		}
@@ -253,9 +267,6 @@ export class BackupFileService implements IBackupFileService {
 	}
 
 	private hashPath(resource: Uri): string {
-		// Windows and Mac paths are case insensitive, we want backups to be too
-		const caseAwarePath = platform.isWindows || platform.isMacintosh ? resource.fsPath.toLowerCase() : resource.fsPath;
-
-		return crypto.createHash('md5').update(caseAwarePath).digest('hex');
+		return crypto.createHash('md5').update(resource.fsPath).digest('hex');
 	}
 }

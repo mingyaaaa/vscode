@@ -16,19 +16,19 @@ suite('Cache', () => {
 		const cache = new Cache(() => TPromise.as(counter++));
 
 		return cache.get()
-			.then(c => assert.equal(c, 0), () => assert.fail())
+			.then(c => assert.equal(c, 0), () => assert.fail('Unexpected assertion error'))
 			.then(() => cache.get())
-			.then(c => assert.equal(c, 0), () => assert.fail());
+			.then(c => assert.equal(c, 0), () => assert.fail('Unexpected assertion error'));
 	});
 
 	test('simple error', () => {
 		let counter = 0;
-		const cache = new Cache(() => TPromise.wrapError(counter++));
+		const cache = new Cache(() => TPromise.wrapError(new Error(String(counter++))));
 
 		return cache.get()
-			.then(() => assert.fail(), err => assert.equal(err, 0))
+			.then(() => assert.fail('Unexpected assertion error'), err => assert.equal(err.message, 0))
 			.then(() => cache.get())
-			.then(() => assert.fail(), err => assert.equal(err, 0));
+			.then(() => assert.fail('Unexpected assertion error'), err => assert.equal(err.message, 0));
 	});
 
 	test('should retry cancellations', () => {

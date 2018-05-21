@@ -6,14 +6,20 @@
 
 import { TPromise } from 'vs/base/common/winjs.base';
 import uri from 'vs/base/common/uri';
-import Event from 'vs/base/common/event';
+import { Event } from 'vs/base/common/event';
 import { CancellationToken } from 'vs/base/common/cancellation';
 import { IQuickNavigateConfiguration, IAutoFocus, IEntryRunContext } from 'vs/base/parts/quickopen/common/quickOpen';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
+import { IAction } from 'vs/base/common/actions';
+import { FileKind } from 'vs/platform/files/common/files';
 
 export interface IFilePickOpenEntry extends IPickOpenEntry {
 	resource: uri;
-	isFolder?: boolean;
+	fileKind?: FileKind;
+}
+
+export interface IPickOpenAction extends IAction {
+	run(item: IPickOpenItem): TPromise<any>;
 }
 
 export interface IPickOpenEntry {
@@ -21,9 +27,20 @@ export interface IPickOpenEntry {
 	label: string;
 	description?: string;
 	detail?: string;
+	tooltip?: string;
 	separator?: ISeparator;
 	alwaysShow?: boolean;
 	run?: (context: IEntryRunContext) => void;
+	action?: IAction;
+	payload?: any;
+}
+
+export interface IPickOpenItem {
+	index: number;
+	remove: () => void;
+	getId: () => string;
+	getResource: () => uri;
+	getPayload: () => any;
 }
 
 export interface ISeparator {
@@ -57,40 +74,22 @@ export interface IPickOptions {
 	 * an optional flag to not close the picker on focus lost
 	 */
 	ignoreFocusLost?: boolean;
-}
-
-export interface IInputOptions {
 
 	/**
-	 * the value to prefill in the input box
+	 * enables quick navigate in the picker to open an element without typing
 	 */
-	value?: string;
+	quickNavigateConfiguration?: IQuickNavigateConfiguration;
 
 	/**
-	 * the text to display underneath the input box
+	 * a context key to set when this picker is active
 	 */
-	prompt?: string;
-
-	/**
-	 * an optional string to show as place holder in the input box to guide the user what to type
-	 */
-	placeHolder?: string;
-
-	/**
-	 * set to true to show a password prompt that will not show the typed value
-	 */
-	password?: boolean;
-
-	ignoreFocusLost?: boolean;
-
-	/**
-	 * an optional function that is used to validate user input.
-	 */
-	validateInput?: (input: string) => TPromise<string>;
+	contextKey?: string;
 }
 
 export interface IShowOptions {
 	quickNavigateConfiguration?: IQuickNavigateConfiguration;
+	inputSelection?: { start: number; end: number; };
+	autoFocus?: IAutoFocus;
 }
 
 export const IQuickOpenService = createDecorator<IQuickOpenService>('quickOpenService');
@@ -124,11 +123,6 @@ export interface IQuickOpenService {
 	 * Allows to navigate from the outside in an opened picker.
 	 */
 	navigate(next: boolean, quickNavigate?: IQuickNavigateConfiguration): void;
-
-	/**
-	 * Opens the quick open box for user input and returns a promise with the user typed value if any.
-	 */
-	input(options?: IInputOptions, token?: CancellationToken): TPromise<string>;
 
 	/**
 	 * Accepts the selected value in quick open if visible.

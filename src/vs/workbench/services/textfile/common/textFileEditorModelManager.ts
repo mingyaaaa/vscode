@@ -4,13 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 'use strict';
 
-import Event, { Emitter, debounceEvent } from 'vs/base/common/event';
+import { Event, Emitter, debounceEvent } from 'vs/base/common/event';
 import { TPromise } from 'vs/base/common/winjs.base';
 import URI from 'vs/base/common/uri';
 import { TextFileEditorModel } from 'vs/workbench/services/textfile/common/textFileEditorModel';
 import { dispose, IDisposable } from 'vs/base/common/lifecycle';
-import { IEditorGroupService } from 'vs/workbench/services/group/common/groupService';
-import { ITextFileEditorModel, ITextFileEditorModelManager, TextFileModelChangeEvent, StateChange } from 'vs/workbench/services/textfile/common/textfiles';
+import { ITextFileEditorModel, ITextFileEditorModelManager, TextFileModelChangeEvent, StateChange, IModelLoadOrCreateOptions, ILoadOptions } from 'vs/workbench/services/textfile/common/textfiles';
 import { ILifecycleService } from 'vs/platform/lifecycle/common/lifecycle';
 import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
 import { ResourceMap } from 'vs/base/common/map';
@@ -18,14 +17,14 @@ import { ResourceMap } from 'vs/base/common/map';
 export class TextFileEditorModelManager implements ITextFileEditorModelManager {
 	private toUnbind: IDisposable[];
 
-	private _onModelDisposed: Emitter<URI>;
-	private _onModelContentChanged: Emitter<TextFileModelChangeEvent>;
-	private _onModelDirty: Emitter<TextFileModelChangeEvent>;
-	private _onModelSaveError: Emitter<TextFileModelChangeEvent>;
-	private _onModelSaved: Emitter<TextFileModelChangeEvent>;
-	private _onModelReverted: Emitter<TextFileModelChangeEvent>;
-	private _onModelEncodingChanged: Emitter<TextFileModelChangeEvent>;
-	private _onModelOrphanedChanged: Emitter<TextFileModelChangeEvent>;
+	private readonly _onModelDisposed: Emitter<URI>;
+	private readonly _onModelContentChanged: Emitter<TextFileModelChangeEvent>;
+	private readonly _onModelDirty: Emitter<TextFileModelChangeEvent>;
+	private readonly _onModelSaveError: Emitter<TextFileModelChangeEvent>;
+	private readonly _onModelSaved: Emitter<TextFileModelChangeEvent>;
+	private readonly _onModelReverted: Emitter<TextFileModelChangeEvent>;
+	private readonly _onModelEncodingChanged: Emitter<TextFileModelChangeEvent>;
+	private readonly _onModelOrphanedChanged: Emitter<TextFileModelChangeEvent>;
 
 	private _onModelsDirtyEvent: Event<TextFileModelChangeEvent[]>;
 	private _onModelsSaveError: Event<TextFileModelChangeEvent[]>;
@@ -40,8 +39,7 @@ export class TextFileEditorModelManager implements ITextFileEditorModelManager {
 
 	constructor(
 		@ILifecycleService private lifecycleService: ILifecycleService,
-		@IInstantiationService private instantiationService: IInstantiationService,
-		@IEditorGroupService private editorGroupService: IEditorGroupService
+		@IInstantiationService private instantiationService: IInstantiationService
 	) {
 		this.toUnbind = [];
 
@@ -74,60 +72,8 @@ export class TextFileEditorModelManager implements ITextFileEditorModelManager {
 
 	private registerListeners(): void {
 
-		// Editors changing/closing
-		this.toUnbind.push(this.editorGroupService.onEditorsChanged(() => this.onEditorsChanged()));
-		this.toUnbind.push(this.editorGroupService.getStacksModel().onEditorClosed(() => this.onEditorClosed()));
-
 		// Lifecycle
 		this.lifecycleService.onShutdown(this.dispose, this);
-	}
-
-	private onEditorsChanged(): void {
-		this.disposeUnusedModels();
-	}
-
-	private onEditorClosed(): void {
-		this.disposeUnusedModels();
-	}
-
-	private disposeUnusedModels(): void {
-
-		// To not grow our text file model cache infinitly, we dispose models that
-		// are not showing up in any opened editor.
-		// TODO@Ben this is a workaround until we have adopted model references from
-		// the resolver service (https://github.com/Microsoft/vscode/issues/17888)
-
-		this.getAll(void 0, model => this.canDispose(model)).forEach(model => {
-			model.dispose();
-		});
-	}
-
-	private canDispose(model: ITextFileEditorModel): boolean {
-		if (!model) {
-			return false; // we need data!
-		}
-
-		if (model.isDisposed()) {
-			return false; // already disposed
-		}
-
-		if (this.mapResourceToPendingModelLoaders.has(model.getResource())) {
-			return false; // not yet loaded
-		}
-
-		if (model.isDirty()) {
-			return false; // not saved
-		}
-
-		if (model.textEditorModel && model.textEditorModel.isAttachedToEditor()) {
-			return false; // never dispose when attached to editor (e.g. viewzones)
-		}
-
-		if (this.editorGroupService.getStacksModel().isOpen(model.getResource())) {
-			return false; // never dispose when opened inside an editor (e.g. tabs)
-		}
-
-		return true;
 	}
 
 	public get onModelDisposed(): Event<URI> {
@@ -213,7 +159,7 @@ export class TextFileEditorModelManager implements ITextFileEditorModelManager {
 		return this.mapResourceToModel.get(resource);
 	}
 
-	public loadOrCreate(resource: URI, encoding?: string, refresh?: boolean): TPromise<ITextFileEditorModel> {
+	public loadOrCreate(resource: URI, options?: IModelLoadOrCreateOptions): TPromise<ITextFileEditorModel> {
 
 		// Return early if model is currently being loaded
 		const pendingLoad = this.mapResourceToPendingModelLoaders.get(resource);
@@ -221,22 +167,27 @@ export class TextFileEditorModelManager implements ITextFileEditorModelManager {
 			return pendingLoad;
 		}
 
+		let modelLoadOptions: ILoadOptions;
+		if (options && options.allowBinary) {
+			modelLoadOptions = { allowBinary: true };
+		}
+
 		let modelPromise: TPromise<ITextFileEditorModel>;
 
 		// Model exists
 		let model = this.get(resource);
 		if (model) {
-			if (!refresh) {
-				modelPromise = TPromise.as(model);
+			if (options && options.reload) {
+				modelPromise = model.load(modelLoadOptions);
 			} else {
-				modelPromise = model.load();
+				modelPromise = TPromise.as(model);
 			}
 		}
 
 		// Model does not exist
 		else {
-			model = this.instantiationService.createInstance(TextFileEditorModel, resource, encoding);
-			modelPromise = model.load();
+			model = this.instantiationService.createInstance(TextFileEditorModel, resource, options ? options.encoding : void 0);
+			modelPromise = model.load(modelLoadOptions);
 
 			// Install state change listener
 			this.mapResourceToStateChangeListener.set(resource, model.onDidStateChange(state => {
@@ -294,7 +245,7 @@ export class TextFileEditorModelManager implements ITextFileEditorModelManager {
 			// Remove from pending loads
 			this.mapResourceToPendingModelLoaders.delete(resource);
 
-			return TPromise.wrapError(error);
+			return TPromise.wrapError<ITextFileEditorModel>(error);
 		});
 	}
 
@@ -374,6 +325,26 @@ export class TextFileEditorModelManager implements ITextFileEditorModelManager {
 		// dispose model content change listeners
 		this.mapResourceToModelContentChangeListener.forEach(l => l.dispose());
 		this.mapResourceToModelContentChangeListener.clear();
+	}
+
+	public disposeModel(model: TextFileEditorModel): void {
+		if (!model) {
+			return; // we need data!
+		}
+
+		if (model.isDisposed()) {
+			return; // already disposed
+		}
+
+		if (this.mapResourceToPendingModelLoaders.has(model.getResource())) {
+			return; // not yet loaded
+		}
+
+		if (model.isDirty()) {
+			return; // not saved
+		}
+
+		model.dispose();
 	}
 
 	public dispose(): void {

@@ -21,13 +21,6 @@ export interface ITelemetryData {
 	[key: string]: any;
 }
 
-export interface ITelemetryExperiments {
-	showNewUserWatermark: boolean;
-	openUntitledFile: boolean;
-	enableWelcomePage: boolean;
-	reorderQuickLinks: boolean;
-}
-
 export interface ITelemetryService {
 
 	_serviceBrand: any;
@@ -36,11 +29,9 @@ export interface ITelemetryService {
 	 * Sends a telemetry event that has been privacy approved.
 	 * Do not call this unless you have been given approval.
 	 */
-	publicLog(eventName: string, data?: ITelemetryData): TPromise<void>;
+	publicLog(eventName: string, data?: ITelemetryData, anonymizeFilePaths?: boolean): TPromise<void>;
 
 	getTelemetryInfo(): TPromise<ITelemetryInfo>;
 
 	isOptedIn: boolean;
-
-	getExperiments(): ITelemetryExperiments;
 }

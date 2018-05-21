@@ -5,20 +5,19 @@
 'use strict';
 
 import { ResolvedKeybinding, Keybinding, SimpleKeybinding } from 'vs/base/common/keyCodes';
-import Event from 'vs/base/common/event';
-import { IKeybindingService, IKeybindingEvent, IKeybindingItem2, IKeyboardEvent } from 'vs/platform/keybinding/common/keybinding';
-import { IContextKey, IContextKeyService, IContextKeyServiceTarget, ContextKeyExpr } from 'vs/platform/contextkey/common/contextkey';
+import { Event } from 'vs/base/common/event';
+import { IKeybindingService, IKeybindingEvent, IKeyboardEvent } from 'vs/platform/keybinding/common/keybinding';
+import { IContextKey, IContextKeyService, IContextKeyServiceTarget, ContextKeyExpr, IContextKeyChangeEvent } from 'vs/platform/contextkey/common/contextkey';
 import { IResolveResult } from 'vs/platform/keybinding/common/keybindingResolver';
 import { USLayoutResolvedKeybinding } from 'vs/platform/keybinding/common/usLayoutResolvedKeybinding';
 import { OS } from 'vs/base/common/platform';
+import { ResolvedKeybindingItem } from 'vs/platform/keybinding/common/resolvedKeybindingItem';
 
 class MockKeybindingContextKey<T> implements IContextKey<T> {
-	private _key: string;
 	private _defaultValue: T;
 	private _value: T;
 
-	constructor(key: string, defaultValue: T) {
-		this._key = key;
+	constructor(defaultValue: T) {
 		this._defaultValue = defaultValue;
 		this._value = this._defaultValue;
 	}
@@ -37,23 +36,30 @@ class MockKeybindingContextKey<T> implements IContextKey<T> {
 }
 
 export class MockContextKeyService implements IContextKeyService {
+
 	public _serviceBrand: any;
+	private _keys = new Map<string, IContextKey<any>>();
 
-	public dispose(): void { }
-
+	public dispose(): void {
+		//
+	}
 	public createKey<T>(key: string, defaultValue: T): IContextKey<T> {
-		return new MockKeybindingContextKey(key, defaultValue);
+		let ret = new MockKeybindingContextKey(defaultValue);
+		this._keys.set(key, ret);
+		return ret;
 	}
 	public contextMatchesRules(rules: ContextKeyExpr): boolean {
 		return false;
 	}
-	public get onDidChangeContext(): Event<string[]> {
+	public get onDidChangeContext(): Event<IContextKeyChangeEvent> {
 		return Event.None;
 	}
 	public getContextKeyValue(key: string) {
-		return;
+		if (this._keys.has(key)) {
+			return this._keys.get(key).get();
+		}
 	}
-	public getContextValue(domNode: HTMLElement): any {
+	public getContext(domNode: HTMLElement): any {
 		return null;
 	}
 	public createScoped(domNode: HTMLElement): IContextKeyService {
@@ -68,16 +74,20 @@ export class MockKeybindingService implements IKeybindingService {
 		return Event.None;
 	}
 
-	public getDefaultKeybindings(): string {
+	public getDefaultKeybindingsContent(): string {
 		return null;
 	}
 
-	public getKeybindings(): IKeybindingItem2[] {
+	public getDefaultKeybindings(): ResolvedKeybindingItem[] {
 		return [];
 	}
 
-	public resolveKeybinding(keybinding: Keybinding): ResolvedKeybinding {
-		return new USLayoutResolvedKeybinding(keybinding, OS);
+	public getKeybindings(): ResolvedKeybindingItem[] {
+		return [];
+	}
+
+	public resolveKeybinding(keybinding: Keybinding): ResolvedKeybinding[] {
+		return [new USLayoutResolvedKeybinding(keybinding, OS)];
 	}
 
 	public resolveKeyboardEvent(keyboardEvent: IKeyboardEvent): ResolvedKeybinding {
@@ -88,7 +98,11 @@ export class MockKeybindingService implements IKeybindingService {
 			keyboardEvent.metaKey,
 			keyboardEvent.keyCode
 		);
-		return this.resolveKeybinding(keybinding);
+		return this.resolveKeybinding(keybinding)[0];
+	}
+
+	public resolveUserBinding(userBinding: string): ResolvedKeybinding[] {
+		return [];
 	}
 
 	public lookupKeybindings(commandId: string): ResolvedKeybinding[] {
@@ -105,5 +119,9 @@ export class MockKeybindingService implements IKeybindingService {
 
 	public softDispatch(keybinding: IKeyboardEvent, target: IContextKeyServiceTarget): IResolveResult {
 		return null;
+	}
+
+	dispatchEvent(e: IKeyboardEvent, target: IContextKeyServiceTarget): boolean {
+		return false;
 	}
 }

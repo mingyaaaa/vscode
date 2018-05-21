@@ -5,7 +5,7 @@
 'use strict';
 
 import { isFalsyOrEmpty } from 'vs/base/common/arrays';
-import { ContextKeyExpr } from 'vs/platform/contextkey/common/contextkey';
+import { ContextKeyExpr, IContext, ContextKeyAndExpr } from 'vs/platform/contextkey/common/contextkey';
 import { ResolvedKeybindingItem } from 'vs/platform/keybinding/common/resolvedKeybindingItem';
 import { CommandsRegistry, ICommandHandlerDescription } from 'vs/platform/commands/common/commands';
 
@@ -19,14 +19,12 @@ export interface IResolveResult {
 export class KeybindingResolver {
 	private readonly _defaultKeybindings: ResolvedKeybindingItem[];
 	private readonly _keybindings: ResolvedKeybindingItem[];
-	private readonly _shouldWarnOnConflict: boolean;
 	private readonly _defaultBoundCommands: Map<string, boolean>;
 	private readonly _map: Map<string, ResolvedKeybindingItem[]>;
 	private readonly _lookupMap: Map<string, ResolvedKeybindingItem[]>;
 
-	constructor(defaultKeybindings: ResolvedKeybindingItem[], overrides: ResolvedKeybindingItem[], shouldWarnOnConflict: boolean = true) {
+	constructor(defaultKeybindings: ResolvedKeybindingItem[], overrides: ResolvedKeybindingItem[]) {
 		this._defaultKeybindings = defaultKeybindings;
-		this._shouldWarnOnConflict = shouldWarnOnConflict;
 
 		this._defaultBoundCommands = new Map<string, boolean>();
 		for (let i = 0, len = defaultKeybindings.length; i < len; i++) {
@@ -123,12 +121,8 @@ export class KeybindingResolver {
 				continue;
 			}
 
-			if (KeybindingResolver.whenIsEntirelyIncluded(true, conflict.when, item.when)) {
+			if (KeybindingResolver.whenIsEntirelyIncluded(conflict.when, item.when)) {
 				// `item` completely overwrites `conflict`
-				if (this._shouldWarnOnConflict && item.isDefault) {
-					console.warn('Conflict detected, command `' + conflict.command + '` cannot be triggered due to ' + item.command);
-				}
-
 				// Remove conflict from the lookupMap
 				this._removeFromLookupMap(conflict);
 			}
@@ -166,15 +160,10 @@ export class KeybindingResolver {
 	}
 
 	/**
-	 * Returns true if `a` is completely covered by `b`.
-	 * Returns true if `b` is a more relaxed `a`.
-	 * Return true if (`a` === true implies `b` === true).
+	 * Returns true if it is provable `a` implies `b`.
+	 * **Precondition**: Assumes `a` and `b` are normalized!
 	 */
-	public static whenIsEntirelyIncluded(inNormalizedForm: boolean, a: ContextKeyExpr, b: ContextKeyExpr): boolean {
-		if (!inNormalizedForm) {
-			a = a ? a.normalize() : null;
-			b = b ? b.normalize() : null;
-		}
+	public static whenIsEntirelyIncluded(a: ContextKeyExpr, b: ContextKeyExpr): boolean {
 		if (!b) {
 			return true;
 		}
@@ -182,16 +171,22 @@ export class KeybindingResolver {
 			return false;
 		}
 
-		let aRulesArr = a.serialize().split(' && ');
-		let bRulesArr = b.serialize().split(' && ');
+		const aExpressions: ContextKeyExpr[] = ((a instanceof ContextKeyAndExpr) ? a.expr : [a]);
+		const bExpressions: ContextKeyExpr[] = ((b instanceof ContextKeyAndExpr) ? b.expr : [b]);
 
-		let aRules: { [rule: string]: boolean; } = Object.create(null);
-		for (let i = 0, len = aRulesArr.length; i < len; i++) {
-			aRules[aRulesArr[i]] = true;
-		}
+		let aIndex = 0;
+		for (let bIndex = 0; bIndex < bExpressions.length; bIndex++) {
+			let bExpr = bExpressions[bIndex];
+			let bExprMatched = false;
+			while (!bExprMatched && aIndex < aExpressions.length) {
+				let aExpr = aExpressions[aIndex];
+				if (aExpr.equals(bExpr)) {
+					bExprMatched = true;
+				}
+				aIndex++;
+			}
 
-		for (let i = 0, len = bRulesArr.length; i < len; i++) {
-			if (!aRules[bRulesArr[i]]) {
+			if (!bExprMatched) {
 				return false;
 			}
 		}
@@ -234,7 +229,7 @@ export class KeybindingResolver {
 		return items[items.length - 1];
 	}
 
-	public resolve(context: any, currentChord: string, keypress: string): IResolveResult {
+	public resolve(context: IContext, currentChord: string, keypress: string): IResolveResult {
 		let lookupMap: ResolvedKeybindingItem[] = null;
 
 		if (currentChord !== null) {
@@ -285,7 +280,7 @@ export class KeybindingResolver {
 		};
 	}
 
-	private _findCommand(context: any, matches: ResolvedKeybindingItem[]): ResolvedKeybindingItem {
+	private _findCommand(context: IContext, matches: ResolvedKeybindingItem[]): ResolvedKeybindingItem {
 		for (let i = matches.length - 1; i >= 0; i--) {
 			let k = matches[i];
 
@@ -299,7 +294,7 @@ export class KeybindingResolver {
 		return null;
 	}
 
-	public static contextMatchesRules(context: any, rules: ContextKeyExpr): boolean {
+	public static contextMatchesRules(context: IContext, rules: ContextKeyExpr): boolean {
 		if (!rules) {
 			return true;
 		}

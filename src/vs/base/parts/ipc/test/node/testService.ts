@@ -6,7 +6,7 @@
 
 import { TPromise, PPromise } from 'vs/base/common/winjs.base';
 import { IChannel, eventToCall, eventFromCall } from 'vs/base/parts/ipc/common/ipc';
-import Event, { Emitter } from 'vs/base/common/event';
+import { Event, Emitter } from 'vs/base/common/event';
 
 export interface IMarcoPoloEvent {
 	answer: string;
@@ -45,7 +45,7 @@ export class TestService implements ITestService {
 			this._data += this._data;
 		}
 		const self = this;
-		return new PPromise((complete, error, progress) => {
+		return new PPromise<any, any[]>((complete, error, progress) => {
 			let j = 0;
 			function send() {
 				if (j >= batches) {
@@ -61,7 +61,7 @@ export class TestService implements ITestService {
 				}
 				progress(batch);
 				process.nextTick(send);
-			};
+			}
 			process.nextTick(send);
 		});
 	}
@@ -94,10 +94,10 @@ export class TestChannel implements ITestChannel {
 export class TestServiceClient implements ITestService {
 
 	private _onMarco: Event<IMarcoPoloEvent>;
-	get onMarco(): Event<IMarcoPoloEvent> { return this._onMarco; };
+	get onMarco(): Event<IMarcoPoloEvent> { return this._onMarco; }
 
 	constructor(private channel: ITestChannel) {
-		this._onMarco = eventFromCall(channel, 'event:marco');
+		this._onMarco = eventFromCall<IMarcoPoloEvent>(channel, 'event:marco');
 	}
 
 	marco(): TPromise<string> {

@@ -6,22 +6,16 @@
 
 import { ResolvedKeybinding, Keybinding, KeyCode } from 'vs/base/common/keyCodes';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
-import { ContextKeyExpr, IContextKeyServiceTarget } from 'vs/platform/contextkey/common/contextkey';
+import { IContextKeyServiceTarget } from 'vs/platform/contextkey/common/contextkey';
 import { IResolveResult } from 'vs/platform/keybinding/common/keybindingResolver';
-import Event from 'vs/base/common/event';
+import { ResolvedKeybindingItem } from 'vs/platform/keybinding/common/resolvedKeybindingItem';
+import { Event } from 'vs/base/common/event';
 
 export interface IUserFriendlyKeybinding {
 	key: string;
 	command: string;
 	args?: any;
 	when?: string;
-}
-
-export interface IKeybindingItem2 {
-	keybinding: ResolvedKeybinding;
-	command: string;
-	source: KeybindingSource;
-	when: ContextKeyExpr;
 }
 
 export enum KeybindingSource {
@@ -43,16 +37,21 @@ export interface IKeyboardEvent {
 	readonly code: string;
 }
 
-export let IKeybindingService = createDecorator<IKeybindingService>('keybindingService');
+export const IKeybindingService = createDecorator<IKeybindingService>('keybindingService');
 
 export interface IKeybindingService {
 	_serviceBrand: any;
 
 	onDidUpdateKeybindings: Event<IKeybindingEvent>;
 
-	resolveKeybinding(keybinding: Keybinding): ResolvedKeybinding;
+	/**
+	 * Returns none, one or many (depending on keyboard layout)!
+	 */
+	resolveKeybinding(keybinding: Keybinding): ResolvedKeybinding[];
 
 	resolveKeyboardEvent(keyboardEvent: IKeyboardEvent): ResolvedKeybinding;
+
+	resolveUserBinding(userBinding: string): ResolvedKeybinding[];
 
 	/**
 	 * Resolve and dispatch `keyboardEvent`, but do not invoke the command or change inner state.
@@ -71,9 +70,11 @@ export interface IKeybindingService {
 	 */
 	lookupKeybinding(commandId: string): ResolvedKeybinding;
 
-	getDefaultKeybindings(): string;
+	getDefaultKeybindingsContent(): string;
 
-	getKeybindings(): IKeybindingItem2[];
+	getDefaultKeybindings(): ResolvedKeybindingItem[];
+
+	getKeybindings(): ResolvedKeybindingItem[];
 
 	customKeybindingsCount(): number;
 }

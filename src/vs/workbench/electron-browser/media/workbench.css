@@ -20,73 +20,24 @@
 	box-sizing:	border-box;
 }
 
-.monaco-workbench .monaco-action-bar .select-box {
+.monaco-workbench .monaco-action-bar .monaco-select-box {
+	margin-top: 10px; /* Center the select box */
+}
+
+.monaco-workbench.windows .monaco-action-bar .monaco-select-box {
 	margin-top: 8px; /* Center the select box */
 }
 
-.monaco-workbench.windows .monaco-action-bar .select-box {
-	margin-top: 7px; /* Center the select box */
+.monaco-font-aliasing-antialiased {
+	-webkit-font-smoothing: antialiased;
 }
 
-#monaco-workbench-drop-overlay {
-	position: absolute;
-	top: 0;
-	left: 0;
-	height: 100%;
-	width: 100%;
-	z-index: 10000;
+.monaco-font-aliasing-none {
+	-webkit-font-smoothing: none;
 }
 
-.hc-black #monaco-workbench-drop-overlay {
-	background: none !important;
-	outline: 2px dashed;
-	outline-offset: -2px;
-}
-
-/* TODO@theme */
-
-.vs .monaco-workbench	{
-	background-color: #F3F3F3;
-}
-
-.vs-dark .monaco-workbench {
-	background-color: #252526;
-	color: #CCC;
-}
-
-.hc-black .monaco-workbench {
-	color: #FFF;
-	background-color: #000;
-}
-
-.vs #monaco-workbench-drop-overlay {
-	background-color: rgba(51,153,255, 0.18);
-}
-
-.vs-dark #monaco-workbench-drop-overlay {
-	background-color: rgba(83, 89, 93, 0.5);
-}
-
-.hc-black #monaco-workbench-drop-overlay {
-	outline-color: #f38518;
-}
-
-.vs-dark .monaco-workbench .monaco-scrollable-element .shadow.top {
-	box-shadow: #000 0 6px 6px -6px inset;
-}
-
-.vs-dark .monaco-workbench .monaco-scrollable-element .shadow.left {
-	box-shadow: #000 6px 0 6px -6px inset;
-}
-
-.vs-dark .monaco-workbench .monaco-scrollable-element .shadow.top.left {
-	box-shadow: #000 6px 6px 6px -6px inset;
-}
-
-.vs-dark .monaco-workbench .monaco-scrollable-element .slider.active {
-	background-color: rgba(85, 85, 85, .8);
-}
-
-.hc-black .monaco-workbench .monaco-action-bar .action-item.disabled .action-label.disabled {
-	opacity: 0.4;
+@media (-webkit-min-device-pixel-ratio: 2), (min-resolution: 192dpi) {
+	.monaco-font-aliasing-auto {
+		-webkit-font-smoothing: antialiased;
+	}
 }

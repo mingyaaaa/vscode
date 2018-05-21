@@ -49,8 +49,13 @@ export enum Mode {
 
 export interface IEntryRunContext {
 	event: any;
-	keymods: number[];
+	keymods: IKeyMods;
 	quickNavigateConfiguration: IQuickNavigateConfiguration;
+}
+
+export interface IKeyMods {
+	ctrlCmd: boolean;
+	alt: boolean;
 }
 
 export interface IDataSource<T> {
@@ -64,8 +69,8 @@ export interface IDataSource<T> {
 export interface IRenderer<T> {
 	getHeight(entry: T): number;
 	getTemplateId(entry: T): string;
-	renderTemplate(templateId: string, container: HTMLElement): any;
-	renderElement(entry: T, templateId: string, templateData: any): void;
+	renderTemplate(templateId: string, container: HTMLElement, styles: any): any;
+	renderElement(entry: T, templateId: string, templateData: any, styles: any): void;
 	disposeTemplate(templateId: string, templateData: any): void;
 }
 

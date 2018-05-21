@@ -7,9 +7,8 @@
 import URI from 'vs/base/common/uri';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
-import Event from 'vs/base/common/event';
+import { Event } from 'vs/base/common/event';
 import { IDisposable } from 'vs/base/common/lifecycle';
-import { IEditorViewState } from 'vs/editor/common/editorCommon';
 
 export const IEditorService = createDecorator<IEditorService>('editorService');
 
@@ -65,6 +64,34 @@ export interface IResourceInput extends IBaseResourceInput {
 
 	/**
 	 * The encoding of the text input if known.
+	 */
+	encoding?: string;
+}
+
+export interface IUntitledResourceInput extends IBaseResourceInput {
+
+	/**
+	 * Optional resource. If the resource is not provided a new untitled file is created.
+	 */
+	resource?: URI;
+
+	/**
+	 * Optional file path. Using the file resource will associate the file to the untitled resource.
+	 */
+	filePath?: string;
+
+	/**
+	 * Optional language of the untitled resource.
+	 */
+	language?: string;
+
+	/**
+	 * Optional contents of the untitled resource.
+	 */
+	contents?: string;
+
+	/**
+	 * Optional encoding of the untitled resource.
 	 */
 	encoding?: string;
 }
@@ -165,9 +192,30 @@ export enum Verbosity {
 	LONG
 }
 
+export interface IRevertOptions {
+
+	/**
+	 *  Forces to load the contents of the editor again even if the editor is not dirty.
+	 */
+	force?: boolean;
+
+	/**
+	 * A soft revert will clear dirty state of an editor but will not attempt to load it.
+	 */
+	soft?: boolean;
+}
+
 export interface IEditorInput extends IDisposable {
 
+	/**
+	 * Triggered when this input is disposed.
+	 */
 	onDispose: Event<void>;
+
+	/**
+	 * Returns the associated resource of this input.
+	 */
+	getResource(): URI;
 
 	/**
 	 * Returns the display name of this input.
@@ -177,7 +225,7 @@ export interface IEditorInput extends IDisposable {
 	/**
 	 * Returns the display description of this input.
 	 */
-	getDescription(verbose?: boolean): string;
+	getDescription(verbosity?: Verbosity): string;
 
 	/**
 	 * Returns the display title of this input.
@@ -197,7 +245,7 @@ export interface IEditorInput extends IDisposable {
 	/**
 	 * Reverts this input.
 	 */
-	revert(): TPromise<boolean>;
+	revert(options?: IRevertOptions): TPromise<boolean>;
 
 	/**
 	 * Returns if the other object matches this input.
@@ -211,19 +259,28 @@ export interface IEditorOptions {
 	 * Tells the editor to not receive keyboard focus when the editor is being opened. By default,
 	 * the editor will receive keyboard focus on open.
 	 */
-	preserveFocus?: boolean;
+	readonly preserveFocus?: boolean;
 
 	/**
 	 * Tells the editor to replace the editor input in the editor even if it is identical to the one
 	 * already showing. By default, the editor will not replace the input if it is identical to the
 	 * one showing.
 	 */
-	forceOpen?: boolean;
+	readonly forceOpen?: boolean;
 
 	/**
-	 * Will reveal the editor if it is already opened and visible in any of the opened editor groups.
+	 * Will reveal the editor if it is already opened and visible in any of the opened editor groups. Note
+	 * that this option is just a hint that might be ignored if the user wants to open an editor explicitly
+	 * to the side of another one.
 	 */
-	revealIfVisible?: boolean;
+	readonly revealIfVisible?: boolean;
+
+	/**
+	 * Will reveal the editor if it is already opened (even when not visible) in any of the opened editor groups. Note
+	 * that this option is just a hint that might be ignored if the user wants to open an editor explicitly
+	 * to the side of another one.
+	 */
+	readonly revealIfOpened?: boolean;
 
 	/**
 	 * An editor that is pinned remains in the editor stack even when another editor is being opened.
@@ -234,13 +291,20 @@ export interface IEditorOptions {
 	/**
 	 * The index in the document stack where to insert the editor into when opening.
 	 */
-	index?: number;
+	readonly index?: number;
 
 	/**
 	 * An active editor that is opened will show its contents directly. Set to true to open an editor
 	 * in the background.
 	 */
-	inactive?: boolean;
+	readonly inactive?: boolean;
+}
+
+export interface ITextEditorSelection {
+	startLineNumber: number;
+	startColumn: number;
+	endLineNumber?: number;
+	endColumn?: number;
 }
 
 export interface ITextEditorOptions extends IEditorOptions {
@@ -248,17 +312,12 @@ export interface ITextEditorOptions extends IEditorOptions {
 	/**
 	 * Text editor selection.
 	 */
-	selection?: {
-		startLineNumber: number;
-		startColumn: number;
-		endLineNumber?: number;
-		endColumn?: number;
-	};
+	selection?: ITextEditorSelection;
 
 	/**
 	 * Text editor view state.
 	 */
-	viewState?: IEditorViewState;
+	viewState?: object;
 
 	/**
 	 * Option to scroll vertically or horizontally as necessary and reveal a range centered vertically only if it lies outside the viewport.

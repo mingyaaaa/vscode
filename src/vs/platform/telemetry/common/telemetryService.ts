@@ -7,22 +7,21 @@
 
 import { localize } from 'vs/nls';
 import { escapeRegExpCharacters } from 'vs/base/common/strings';
-import { ITelemetryService, ITelemetryInfo, ITelemetryExperiments, ITelemetryData } from 'vs/platform/telemetry/common/telemetry';
-import { ITelemetryAppender, defaultExperiments } from 'vs/platform/telemetry/common/telemetryUtils';
+import { ITelemetryService, ITelemetryInfo, ITelemetryData } from 'vs/platform/telemetry/common/telemetry';
+import { ITelemetryAppender } from 'vs/platform/telemetry/common/telemetryUtils';
 import { optional } from 'vs/platform/instantiation/common/instantiation';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { IConfigurationRegistry, Extensions } from 'vs/platform/configuration/common/configurationRegistry';
 import { TPromise } from 'vs/base/common/winjs.base';
 import { IDisposable, dispose } from 'vs/base/common/lifecycle';
 import { cloneAndChange, mixin } from 'vs/base/common/objects';
-import { Registry } from 'vs/platform/platform';
+import { Registry } from 'vs/platform/registry/common/platform';
 
 export interface ITelemetryServiceConfig {
 	appender: ITelemetryAppender;
 	commonProperties?: TPromise<{ [name: string]: any }>;
 	piiPaths?: string[];
 	userOptIn?: boolean;
-	experiments?: ITelemetryExperiments;
 }
 
 export class TelemetryService implements ITelemetryService {
@@ -36,10 +35,9 @@ export class TelemetryService implements ITelemetryService {
 	private _commonProperties: TPromise<{ [name: string]: any; }>;
 	private _piiPaths: string[];
 	private _userOptIn: boolean;
-	private _experiments: ITelemetryExperiments;
 
 	private _disposables: IDisposable[] = [];
-	private _cleanupPatterns: [RegExp, string][] = [];
+	private _cleanupPatterns: RegExp[] = [];
 
 	constructor(
 		config: ITelemetryServiceConfig,
@@ -49,40 +47,33 @@ export class TelemetryService implements ITelemetryService {
 		this._commonProperties = config.commonProperties || TPromise.as({});
 		this._piiPaths = config.piiPaths || [];
 		this._userOptIn = typeof config.userOptIn === 'undefined' ? true : config.userOptIn;
-		this._experiments = config.experiments || defaultExperiments;
 
-		// static cleanup patterns for:
-		// #1 `file:///DANGEROUS/PATH/resources/app/Useful/Information`
-		// #2 // Any other file path that doesn't match the approved form above should be cleaned.
-		// #3 "Error: ENOENT; no such file or directory" is often followed with PII, clean it
-		this._cleanupPatterns.push(
-			[/file:\/\/\/.*?\/resources\/app\//gi, ''],
-			[/file:\/\/\/.*/gi, ''],
-			[/ENOENT: no such file or directory.*?\'([^\']+)\'/gi, 'ENOENT: no such file or directory']
-		);
+		// static cleanup pattern for: `file:///DANGEROUS/PATH/resources/app/Useful/Information`
+		this._cleanupPatterns = [/file:\/\/\/.*?\/resources\/app\//gi];
 
 		for (let piiPath of this._piiPaths) {
-			this._cleanupPatterns.push([new RegExp(escapeRegExpCharacters(piiPath), 'gi'), '']);
+			this._cleanupPatterns.push(new RegExp(escapeRegExpCharacters(piiPath), 'gi'));
 		}
 
 		if (this._configurationService) {
 			this._updateUserOptIn();
-			this._configurationService.onDidUpdateConfiguration(this._updateUserOptIn, this, this._disposables);
+			this._configurationService.onDidChangeConfiguration(this._updateUserOptIn, this, this._disposables);
+			/* __GDPR__
+				"optInStatus" : {
+					"optIn" : { "classification": "SystemMetaData", "purpose": "BusinessInsight", "isMeasurement": true }
+				}
+			*/
 			this.publicLog('optInStatus', { optIn: this._userOptIn });
 		}
 	}
 
 	private _updateUserOptIn(): void {
-		const config = this._configurationService.getConfiguration<any>(TELEMETRY_SECTION_ID);
+		const config = this._configurationService.getValue<any>(TELEMETRY_SECTION_ID);
 		this._userOptIn = config ? config.enableTelemetry : this._userOptIn;
 	}
 
 	get isOptedIn(): boolean {
 		return this._userOptIn;
-	}
-
-	getExperiments(): ITelemetryExperiments {
-		return this._experiments;
 	}
 
 	getTelemetryInfo(): TPromise<ITelemetryInfo> {
@@ -100,7 +91,7 @@ export class TelemetryService implements ITelemetryService {
 		this._disposables = dispose(this._disposables);
 	}
 
-	publicLog(eventName: string, data?: ITelemetryData): TPromise<any> {
+	publicLog(eventName: string, data?: ITelemetryData, anonymizeFilePaths?: boolean): TPromise<any> {
 		// don't send events when the user is optout
 		if (!this._userOptIn) {
 			return TPromise.as(undefined);
@@ -114,7 +105,7 @@ export class TelemetryService implements ITelemetryService {
 			// (last) remove all PII from data
 			data = cloneAndChange(data, value => {
 				if (typeof value === 'string') {
-					return this._cleanupInfo(value);
+					return this._cleanupInfo(value, anonymizeFilePaths);
 				}
 				return undefined;
 			});
@@ -127,15 +118,41 @@ export class TelemetryService implements ITelemetryService {
 		});
 	}
 
-	private _cleanupInfo(stack: string): string {
+	private _cleanupInfo(stack: string, anonymizeFilePaths?: boolean): string {
+		let updatedStack = stack;
 
-		// sanitize with configured cleanup patterns
-		for (let tuple of this._cleanupPatterns) {
-			let [regexp, replaceValue] = tuple;
-			stack = stack.replace(regexp, replaceValue);
+		if (anonymizeFilePaths) {
+			const cleanUpIndexes: [number, number][] = [];
+			for (let regexp of this._cleanupPatterns) {
+				while (true) {
+					const result = regexp.exec(stack);
+					if (!result) {
+						break;
+					}
+					cleanUpIndexes.push([result.index, regexp.lastIndex]);
+				}
+			}
+
+			const nodeModulesRegex = /^[\\\/]?(node_modules|node_modules\.asar)[\\\/]/;
+			const fileRegex = /(file:\/\/)?([a-zA-Z]:(\\\\|\\|\/)|(\\\\|\\|\/))?([\w-\._]+(\\\\|\\|\/))+[\w-\._]*/g;
+
+			while (true) {
+				const result = fileRegex.exec(stack);
+				if (!result) {
+					break;
+				}
+				// Anoynimize user file paths that do not need to be retained or cleaned up.
+				if (!nodeModulesRegex.test(result[0]) && cleanUpIndexes.every(([x, y]) => result.index < x || result.index >= y)) {
+					updatedStack = updatedStack.slice(0, result.index) + result[0].replace(/./g, 'a') + updatedStack.slice(fileRegex.lastIndex);
+				}
+			}
 		}
 
-		return stack;
+		// sanitize with configured cleanup patterns
+		for (let regexp of this._cleanupPatterns) {
+			updatedStack = updatedStack.replace(regexp, '');
+		}
+		return updatedStack;
 	}
 }
 

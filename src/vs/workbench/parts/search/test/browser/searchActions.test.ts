@@ -19,7 +19,7 @@ import { Tree } from 'vs/base/parts/tree/browser/treeImpl';
 import { IKeybindingService } from 'vs/platform/keybinding/common/keybinding';
 import { USLayoutResolvedKeybinding } from 'vs/platform/keybinding/common/usLayoutResolvedKeybinding';
 import { OS } from 'vs/base/common/platform';
-import { Keybinding } from "vs/base/common/keyCodes";
+import { Keybinding } from 'vs/base/common/keyCodes';
 
 suite('Search Actions', () => {
 
@@ -30,11 +30,12 @@ suite('Search Actions', () => {
 		instantiationService = new TestInstantiationService();
 		instantiationService.stub(IModelService, stubModelService(instantiationService));
 		instantiationService.stub(IKeybindingService, {});
-		instantiationService.stub(IKeybindingService, 'resolveKeybinding', (keybinding: Keybinding) => new USLayoutResolvedKeybinding(keybinding, OS));
+		instantiationService.stub(IKeybindingService, 'resolveKeybinding', (keybinding: Keybinding) => [new USLayoutResolvedKeybinding(keybinding, OS)]);
+		instantiationService.stub(IKeybindingService, 'lookupKeybinding', (id: string) => null);
 		counter = 0;
 	});
 
-	test('get next element to focus after removing a match when it has next sibling match', function () {
+	test('get next element to focus after removing a match when it has next sibling file', function () {
 		let fileMatch1 = aFileMatch();
 		let fileMatch2 = aFileMatch();
 		let data = [fileMatch1, aMatch(fileMatch1), aMatch(fileMatch1), fileMatch2, aMatch(fileMatch2), aMatch(fileMatch2)];
@@ -44,7 +45,7 @@ suite('Search Actions', () => {
 
 		let actual = testObject.getElementToFocusAfterRemoved(tree, target);
 
-		assert.equal(data[3], actual);
+		assert.equal(data[4], actual);
 	});
 
 	test('get next element to focus after removing a match when it does not have next sibling match', function () {
@@ -130,7 +131,7 @@ suite('Search Actions', () => {
 			resource: URI.file('somepath' + ++counter),
 			lineMatches: []
 		};
-		return instantiationService.createInstance(FileMatch, null, null, rawMatch);
+		return instantiationService.createInstance(FileMatch, null, null, null, rawMatch);
 	}
 
 	function aMatch(fileMatch: FileMatch): Match {

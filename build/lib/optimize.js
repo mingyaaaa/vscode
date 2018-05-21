@@ -10,6 +10,8 @@ var sourcemaps = require("gulp-sourcemaps");
 var filter = require("gulp-filter");
 var minifyCSS = require("gulp-cssnano");
 var uglify = require("gulp-uglify");
+var composer = require("gulp-uglify/composer");
+var uglifyes = require("uglify-es");
 var es = require("event-stream");
 var concat = require("gulp-concat");
 var VinylFile = require("vinyl");
@@ -55,7 +57,7 @@ function loader(bundledFileHeader, bundleLoader) {
             this.emit('data', new VinylFile({
                 path: 'fake',
                 base: '',
-                contents: new Buffer(bundledFileHeader)
+                contents: Buffer.from(bundledFileHeader)
             }));
             this.emit('data', data);
         }
@@ -94,7 +96,7 @@ function toConcatStream(bundledFileHeader, sources, dest) {
         return new VinylFile({
             path: source.path ? root + '/' + source.path.replace(/\\/g, '/') : 'fake',
             base: base,
-            contents: new Buffer(source.contents)
+            contents: Buffer.from(source.contents)
         });
     });
     return es.readArray(treatedSources)
@@ -137,7 +139,7 @@ function optimizeTask(opts) {
                 bundleInfoArray.push(new VinylFile({
                     path: 'bundleInfo.json',
                     base: '.',
-                    contents: new Buffer(JSON.stringify(result.bundleData, null, '\t'))
+                    contents: Buffer.from(JSON.stringify(result.bundleData, null, '\t'))
                 }));
             }
             es.readArray(bundleInfoArray).pipe(bundleInfoStream);
@@ -163,13 +165,13 @@ function optimizeTask(opts) {
             includeContent: true
         }))
             .pipe(i18n.processNlsFiles({
-            fileHeader: bundledFileHeader
+            fileHeader: bundledFileHeader,
+            languages: opts.languages
         }))
             .pipe(gulp.dest(out));
     };
 }
 exports.optimizeTask = optimizeTask;
-;
 /**
  * Wrap around uglify and allow the preserveComments function
  * to have a file "context" to include our copyright only once per file.
@@ -200,11 +202,16 @@ function uglifyWithCopyrights() {
             return false;
         };
     };
+    var minify = composer(uglifyes);
     var input = es.through();
     var output = input
         .pipe(flatmap(function (stream, f) {
-        return stream
-            .pipe(uglify({ preserveComments: preserveComments(f) }));
+        return stream.pipe(minify({
+            output: {
+                comments: preserveComments(f),
+                max_line_len: 1024
+            }
+        }));
     }));
     return es.duplex(input, output);
 }
@@ -227,4 +234,3 @@ function minifyTask(src, sourceMapBaseUrl) {
     };
 }
 exports.minifyTask = minifyTask;
-;

@@ -6,27 +6,28 @@
 'use strict';
 
 import URI from 'vs/base/common/uri';
-import { match as matchGlobPattern } from 'vs/base/common/glob'; // TODO@Alex
+import { match as matchGlobPattern, IRelativePattern } from 'vs/base/common/glob'; // TODO@Alex
 
 export interface LanguageFilter {
 	language?: string;
 	scheme?: string;
-	pattern?: string;
+	pattern?: string | IRelativePattern;
+	/**
+	 * This provider is implemented in the UI thread.
+	 */
+	hasAccessToAllModels?: boolean;
+	exclusive?: boolean;
 }
 
 export type LanguageSelector = string | LanguageFilter | (string | LanguageFilter)[];
 
-export default function matches(selection: LanguageSelector, uri: URI, language: string): boolean {
-	return score(selection, uri, language) > 0;
-}
-
-export function score(selector: LanguageSelector, candidateUri: URI, candidateLanguage: string): number {
+export function score(selector: LanguageSelector, candidateUri: URI, candidateLanguage: string, candidateIsSynchronized: boolean): number {
 
 	if (Array.isArray(selector)) {
 		// array -> take max individual value
 		let ret = 0;
 		for (const filter of selector) {
-			const value = score(filter, candidateUri, candidateLanguage);
+			const value = score(filter, candidateUri, candidateLanguage, candidateIsSynchronized);
 			if (value === 10) {
 				return value; // already at the highest
 			}
@@ -37,12 +38,17 @@ export function score(selector: LanguageSelector, candidateUri: URI, candidateLa
 		return ret;
 
 	} else if (typeof selector === 'string') {
+
+		if (!candidateIsSynchronized) {
+			return 0;
+		}
+
 		// short-hand notion, desugars to
-		// 'fooLang' -> [{ language: 'fooLang', scheme: 'file' }, { language: 'fooLang', scheme: 'untitled' }]
-		// '*' -> { language: '*', scheme: '*' }
+		// 'fooLang' -> { language: 'fooLang'}
+		// '*' -> { language: '*' }
 		if (selector === '*') {
 			return 5;
-		} else if (selector === candidateLanguage && _defaultSchemes[candidateUri.scheme]) {
+		} else if (selector === candidateLanguage) {
 			return 10;
 		} else {
 			return 0;
@@ -50,7 +56,11 @@ export function score(selector: LanguageSelector, candidateUri: URI, candidateLa
 
 	} else if (selector) {
 		// filter -> select accordingly, use defaults for scheme
-		const { language, pattern, scheme } = selector;
+		const { language, pattern, scheme, hasAccessToAllModels } = selector;
+
+		if (!candidateIsSynchronized && !hasAccessToAllModels) {
+			return 0;
+		}
 
 		let ret = 0;
 
@@ -82,24 +92,9 @@ export function score(selector: LanguageSelector, candidateUri: URI, candidateLa
 			}
 		}
 
-		if (!_defaultSchemes[candidateUri.scheme] && !scheme && language !== '*') {
-			// undo match when the uri-scheme is special and not
-			// explicitly selected
-			return 0;
-		} else {
-			return ret;
-		}
+		return ret;
 
 	} else {
 		return 0;
 	}
 }
-
-interface DefaultSchemes {
-	file: 'file';
-	untitled: 'untitled';
-}
-
-const _defaultSchemes: DefaultSchemes = Object.create(null);
-_defaultSchemes.file = 'file';
-_defaultSchemes.untitled = 'untitled';

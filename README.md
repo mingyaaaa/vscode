@@ -1,7 +1,6 @@
 # Visual Studio Code - Open Source
 
-[![Build Status](https://travis-ci.org/Microsoft/vscode.svg?branch=master)](https://travis-ci.org/Microsoft/vscode)
-[![Build Status](https://ci.appveyor.com/api/projects/status/vuhlhg80tj3e2a0l/branch/master?svg=true)](https://ci.appveyor.com/project/VSCode/vscode)
+[![Build Status](https://vscode.visualstudio.com/_apis/public/build/definitions/a4cdce18-a05c-4bb8-9476-5d07e63bfd76/1/badge)](https://aka.ms/vscode-builds)
 [![Coverage Status](https://img.shields.io/coveralls/Microsoft/vscode/master.svg)](https://coveralls.io/github/Microsoft/vscode?branch=master)
 [![Gitter](https://img.shields.io/badge/chat-on%20gitter-blue.svg)](https://gitter.im/Microsoft/vscode)
 
@@ -9,7 +8,7 @@
 a code editor with what developers need for their core edit-build-debug cycle. Code
 provides comprehensive editing and debugging support, an extensibility model, and lightweight integration with existing tools.
 
-VS Code is updated monthly with new features and bug fixes. You can download it for Windows, Mac and Linux on [VS Code's website](https://code.visualstudio.com/Download). To get the latest releases everyday, you can install the [Insiders version of VS Code](https://code.visualstudio.com/insiders). This builds from the master branch and is updated at least daily. 
+VS Code is updated monthly with new features and bug fixes. You can download it for Windows, macOS, and Linux on [VS Code's website](https://code.visualstudio.com/Download). To get the latest releases every day, you can install the [Insiders version of VS Code](https://code.visualstudio.com/insiders). This builds from the master branch and is updated at least daily.
 
 <p align="center">
   <img alt="VS Code in action" src="https://cloud.githubusercontent.com/assets/11839736/16642200/6624dde0-43bd-11e6-8595-c81885ba0dc2.png">
@@ -30,12 +29,13 @@ please see the document [How to Contribute](https://github.com/Microsoft/vscode/
 * [The development workflow, including debugging and running tests](https://github.com/Microsoft/vscode/wiki/How-to-Contribute#development-workflow)
 * [Coding Guidelines](https://github.com/Microsoft/vscode/wiki/Coding-Guidelines)
 * [Submitting pull requests](https://github.com/Microsoft/vscode/wiki/How-to-Contribute#pull-requests)
+* [Contributing to translations](https://aka.ms/vscodeloc)
 
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+Please see also our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Feedback
 
-* Ask a question on [Stack Overflow](http://stackoverflow.com/questions/tagged/vscode).
+* Ask a question on [Stack Overflow](https://stackoverflow.com/questions/tagged/vscode).
 * Request a new feature on [GitHub](CONTRIBUTING.md).
 * Vote for [popular feature requests](https://github.com/Microsoft/vscode/issues?q=is%3Aopen+is%3Aissue+label%3Afeature-request+sort%3Areactions-%2B1-desc).
 * File a bug in [GitHub Issues](https://github.com/Microsoft/vscode/issues).

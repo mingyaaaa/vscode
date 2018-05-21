@@ -32,6 +32,7 @@ export class LinesDecorationsOverlay extends DedupOverlay {
 		this._context.removeEventHandler(this);
 		this._context = null;
 		this._renderResult = null;
+		super.dispose();
 	}
 
 	// --- begin event handlers
@@ -42,12 +43,6 @@ export class LinesDecorationsOverlay extends DedupOverlay {
 			this._decorationsWidth = this._context.configuration.editor.layoutInfo.decorationsWidth;
 		}
 		return true;
-	}
-	public onCursorPositionChanged(e: viewEvents.ViewCursorPositionChangedEvent): boolean {
-		return false;
-	}
-	public onCursorSelectionChanged(e: viewEvents.ViewCursorSelectionChangedEvent): boolean {
-		return false;
 	}
 	public onDecorationsChanged(e: viewEvents.ViewDecorationsChangedEvent): boolean {
 		return true;
@@ -64,9 +59,6 @@ export class LinesDecorationsOverlay extends DedupOverlay {
 	public onLinesInserted(e: viewEvents.ViewLinesInsertedEvent): boolean {
 		return true;
 	}
-	public onRevealRangeRequest(e: viewEvents.ViewRevealRangeRequestEvent): boolean {
-		return false;
-	}
 	public onScrollChanged(e: viewEvents.ViewScrollChangedEvent): boolean {
 		return e.scrollTopChanged;
 	}
@@ -78,12 +70,12 @@ export class LinesDecorationsOverlay extends DedupOverlay {
 
 	protected _getDecorations(ctx: RenderingContext): DecorationToRender[] {
 		let decorations = ctx.getDecorationsInViewport();
-		let r: DecorationToRender[] = [];
+		let r: DecorationToRender[] = [], rLen = 0;
 		for (let i = 0, len = decorations.length; i < len; i++) {
 			let d = decorations[i];
-			let linesDecorationsClassName = d.source.options.linesDecorationsClassName;
+			let linesDecorationsClassName = d.options.linesDecorationsClassName;
 			if (linesDecorationsClassName) {
-				r.push(new DecorationToRender(d.range.startLineNumber, d.range.endLineNumber, linesDecorationsClassName));
+				r[rLen++] = new DecorationToRender(d.range.startLineNumber, d.range.endLineNumber, linesDecorationsClassName);
 			}
 		}
 		return r;

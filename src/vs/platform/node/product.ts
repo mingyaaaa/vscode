@@ -18,21 +18,30 @@ export interface IProductConfiguration {
 	downloadUrl: string;
 	updateUrl?: string;
 	quality?: string;
-	commit: string;
+	commit?: string;
+	settingsSearchBuildId?: number;
+	settingsSearchUrl?: string;
 	date: string;
 	extensionsGallery: {
 		serviceUrl: string;
 		itemUrl: string;
+		controlUrl: string;
+		recommendationsUrl: string;
 	};
 	extensionTips: { [id: string]: string; };
 	extensionImportantTips: { [id: string]: { name: string; pattern: string; }; };
+	exeBasedExtensionTips: { [id: string]: any; };
 	extensionKeywords: { [extension: string]: string[]; };
+	extensionAllowedBadgeProviders: string[];
+	extensionAllowedProposedApi: string[];
 	keymapExtensionTips: string[];
-	crashReporter: Electron.CrashReporterStartOptions;
+	crashReporter: {
+		companyName: string;
+		productName: string;
+	};
 	welcomePage: string;
 	enableTelemetry: boolean;
 	aiConfig: {
-		key: string;
 		asimovKey: string;
 	};
 	sendASmile: {
@@ -45,15 +54,33 @@ export interface IProductConfiguration {
 	keyboardShortcutsUrlLinux: string;
 	keyboardShortcutsUrlWin: string;
 	introductoryVideosUrl: string;
+	tipsAndTricksUrl: string;
 	twitterUrl: string;
 	requestFeatureUrl: string;
 	reportIssueUrl: string;
 	licenseUrl: string;
 	privacyStatementUrl: string;
+	telemetryOptOutUrl: string;
 	npsSurveyUrl: string;
+	surveys: ISurveyData[];
 	checksums: { [path: string]: string; };
 	checksumFailMoreInfoUrl: string;
-	extraNodeModules: string[];
+	hockeyApp: {
+		'win32-ia32': string;
+		'win32-x64': string;
+		'linux-ia32': string;
+		'linux-x64': string;
+		'darwin': string;
+	};
+	logUploaderUrl: string;
+}
+
+export interface ISurveyData {
+	surveyId: string;
+	surveyUrl: string;
+	languageId: string;
+	editCount: number;
+	userProbability: number;
 }
 
 const rootPath = path.dirname(uri.parse(require.toUrl('')).fsPath);

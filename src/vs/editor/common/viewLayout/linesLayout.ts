@@ -4,9 +4,9 @@
  *--------------------------------------------------------------------------------------------*/
 'use strict';
 
-import { IEditorWhitespace, IViewWhitespaceViewportData } from 'vs/editor/common/editorCommon';
-import { WhitespaceComputer } from 'vs/editor/common/viewLayout/whitespaceComputer';
+import { WhitespaceComputer, IEditorWhitespace } from 'vs/editor/common/viewLayout/whitespaceComputer';
 import { IPartialViewLinesViewportData } from 'vs/editor/common/viewLayout/viewLinesViewportData';
+import { IViewWhitespaceViewportData } from 'vs/editor/common/viewModel/viewModel';
 
 /**
  * Layouting of objects that take vertical space (by having a height) and push down other objects.
@@ -64,8 +64,8 @@ export class LinesLayout {
 	 * @param heightInPx The height of the whitespace, in pixels.
 	 * @return An id that can be used later to mutate or delete the whitespace
 	 */
-	public insertWhitespace(afterLineNumber: number, ordinal: number, heightInPx: number): number {
-		return this._whitespaces.insertWhitespace(afterLineNumber, ordinal, heightInPx);
+	public insertWhitespace(afterLineNumber: number, ordinal: number, heightInPx: number, minWidth: number): number {
+		return this._whitespaces.insertWhitespace(afterLineNumber, ordinal, heightInPx, minWidth);
 	}
 
 	/**
@@ -153,6 +153,10 @@ export class LinesLayout {
 	 */
 	public hasWhitespace(): boolean {
 		return this._whitespaces.getCount() > 0;
+	}
+
+	public getWhitespaceMinWidth(): number {
+		return this._whitespaces.getMinWidth();
 	}
 
 	/**

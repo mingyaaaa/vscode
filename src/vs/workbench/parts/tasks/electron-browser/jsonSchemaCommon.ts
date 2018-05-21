@@ -7,7 +7,7 @@
 import * as nls from 'vs/nls';
 import { IJSONSchema } from 'vs/base/common/jsonSchema';
 
-import { Schemas } from 'vs/platform/markers/common/problemMatcher';
+import { Schemas } from 'vs/workbench/parts/tasks/common/problemMatcher';
 
 const schema: IJSONSchema = {
 	definitions: {
@@ -57,6 +57,7 @@ const schema: IJSONSchema = {
 		shellConfiguration: {
 			type: 'object',
 			additionalProperties: false,
+			description: nls.localize('JsonSchema.shellConfiguration', 'Configures the shell to be used.'),
 			properties: {
 				executable: {
 					type: 'string',
@@ -174,6 +175,7 @@ const schema: IJSONSchema = {
 		},
 		taskRunnerConfiguration: {
 			type: 'object',
+			required: [],
 			properties: {
 				command: {
 					type: 'string',

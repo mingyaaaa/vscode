@@ -5,14 +5,14 @@
 'use strict';
 
 
-import assert = require('assert');
+import * as assert from 'assert';
 import URI from 'vs/base/common/uri';
-import markerService = require('vs/platform/markers/common/markerService');
-import { IMarkerData } from 'vs/platform/markers/common/markers';
+import * as markerService from 'vs/platform/markers/common/markerService';
+import { IMarkerData, MarkerSeverity } from 'vs/platform/markers/common/markers';
 
-function randomMarkerData(): IMarkerData {
+function randomMarkerData(severity = MarkerSeverity.Error): IMarkerData {
 	return {
-		severity: 1,
+		severity,
 		message: Math.random().toString(16),
 		startLineNumber: 1,
 		startColumn: 1,
@@ -29,7 +29,7 @@ suite('Marker Service', () => {
 
 		service.changeAll('far', [{
 			resource: URI.parse('file:///c/test/file.cs'),
-			marker: randomMarkerData()
+			marker: randomMarkerData(MarkerSeverity.Error)
 		}]);
 
 		assert.equal(service.read().length, 1);
@@ -40,12 +40,18 @@ suite('Marker Service', () => {
 
 		service.changeAll('boo', [{
 			resource: URI.parse('file:///c/test/file.cs'),
-			marker: randomMarkerData()
+			marker: randomMarkerData(MarkerSeverity.Warning)
 		}]);
 
 		assert.equal(service.read().length, 2);
 		assert.equal(service.read({ owner: 'far' }).length, 1);
 		assert.equal(service.read({ owner: 'boo' }).length, 1);
+
+		assert.equal(service.read({ severities: MarkerSeverity.Error }).length, 1);
+		assert.equal(service.read({ severities: MarkerSeverity.Warning }).length, 1);
+		assert.equal(service.read({ severities: MarkerSeverity.Hint }).length, 0);
+		assert.equal(service.read({ severities: MarkerSeverity.Error | MarkerSeverity.Warning }).length, 2);
+
 	});
 
 
@@ -175,5 +181,25 @@ suite('Marker Service', () => {
 		service.changeOne('o', URI.parse('some:uri/1'), [randomMarkerData()]);
 		service.changeOne('o', URI.parse('some:uri/2'), []);
 
+	});
+
+	test('Error code of zero in markers get removed, #31275', function () {
+		let data = <IMarkerData>{
+			code: '0',
+			startLineNumber: 1,
+			startColumn: 2,
+			endLineNumber: 1,
+			endColumn: 5,
+			message: 'test',
+			severity: 0,
+			source: 'me'
+		};
+		let service = new markerService.MarkerService();
+
+		service.changeOne('far', URI.parse('some:thing'), [data]);
+		let marker = service.read({ resource: URI.parse('some:thing') });
+
+		assert.equal(marker.length, 1);
+		assert.equal(marker[0].code, '0');
 	});
 });

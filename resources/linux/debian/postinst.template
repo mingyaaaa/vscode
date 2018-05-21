@@ -24,17 +24,11 @@ if [ "@@NAME@@" != "code-oss" ]; then
 	fi
 
 	# Register apt repository
-	get_apt_config_value() {
-		echo $(apt-config dump | grep "$1 " | sed -e "s/$1 \"//" -e "s/\";$//")
-	}
+	eval $(apt-config shell APT_SOURCE_PARTS Dir::Etc::sourceparts/d)
+	CODE_SOURCE_PART=${APT_SOURCE_PARTS}vscode.list
 
-	APT_DIR=$(get_apt_config_value Dir)
-	APT_ETC=$APT_DIR$(get_apt_config_value Dir::Etc)
-	APT_SOURCE_PARTS=$APT_ETC/$(get_apt_config_value Dir::Etc::sourceparts)
-	CODE_SOURCE_PART=$APT_SOURCE_PARTS/vscode.list
-
-	APT_TRUSTED_PARTS=$APT_ETC/$(get_apt_config_value Dir::Etc::trustedparts)
-	CODE_TRUSTED_PART=$APT_TRUSTED_PARTS/microsoft.gpg
+	eval $(apt-config shell APT_TRUSTED_PARTS Dir::Etc::trustedparts/d)
+	CODE_TRUSTED_PART=${APT_TRUSTED_PARTS}microsoft.gpg
 
 	# Sourced from https://packages.microsoft.com/keys/microsoft.asc
 	if [ ! -f $CODE_TRUSTED_PART ]; then
@@ -61,8 +55,18 @@ NdCFTW7wY0Fb1fWJ+/KTsC4=
 		mv microsoft.gpg $CODE_TRUSTED_PART
 	fi
 
-	# Install repository source list if it does not already exist
+	# Install repository source list
+	WRITE_SOURCE=0
 	if [ ! -f $CODE_SOURCE_PART ]; then
-		echo "deb [arch=amd64] http://packages.microsoft.com/repos/vscode stable main" > $CODE_SOURCE_PART
+		# Write source list if it does not exist
+		WRITE_SOURCE=1
+	elif grep -q "# disabled on upgrade to" /etc/apt/sources.list.d/vscode.list; then
+		# Write source list if it was disabled by OS upgrade
+		WRITE_SOURCE=1
+	fi
+	if [ "$WRITE_SOURCE" -eq "1" ]; then
+		echo "### THIS FILE IS AUTOMATICALLY CONFIGURED ###
+# You may comment out this entry, but any other modifications may be lost.
+deb [arch=amd64] http://packages.microsoft.com/repos/vscode stable main" > $CODE_SOURCE_PART
 	fi
 fi

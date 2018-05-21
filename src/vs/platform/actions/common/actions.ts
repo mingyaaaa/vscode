@@ -12,14 +12,19 @@ import { IKeybindings } from 'vs/platform/keybinding/common/keybindingsRegistry'
 import { ContextKeyExpr, IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
 import { ICommandService } from 'vs/platform/commands/common/commands';
 import { IDisposable } from 'vs/base/common/lifecycle';
-import Event from 'vs/base/common/event';
+import { Event } from 'vs/base/common/event';
+
+export interface ILocalizedString {
+	value: string;
+	original: string;
+}
 
 export interface ICommandAction {
 	id: string;
-	title: string;
-	alias?: string;
-	category?: string;
-	iconClass?: string;
+	title: string | ILocalizedString;
+	category?: string | ILocalizedString;
+	iconPath?: { dark: string; light?: string; };
+	precondition?: ContextKeyExpr;
 }
 
 export interface IMenuItem {
@@ -32,33 +37,41 @@ export interface IMenuItem {
 
 export class MenuId {
 
-	static readonly EditorTitle = new MenuId('1');
-	static readonly EditorTitleContext = new MenuId('2');
-	static readonly EditorContext = new MenuId('3');
-	static readonly ExplorerContext = new MenuId('4');
-	static readonly ProblemsPanelContext = new MenuId('5');
-	static readonly DebugVariablesContext = new MenuId('6');
-	static readonly DebugWatchContext = new MenuId('7');
-	static readonly DebugCallStackContext = new MenuId('8');
-	static readonly DebugBreakpointsContext = new MenuId('9');
-	static readonly DebugConsoleContext = new MenuId('10');
-	static readonly SCMTitle = new MenuId('11');
-	static readonly SCMResourceGroupContext = new MenuId('12');
-	static readonly SCMResourceContext = new MenuId('13');
-	static readonly CommandPalette = new MenuId('14');
+	private static ID = 1;
 
-	constructor(private _id: string) {
+	static readonly EditorTitle = new MenuId();
+	static readonly EditorTitleContext = new MenuId();
+	static readonly EditorContext = new MenuId();
+	static readonly ExplorerContext = new MenuId();
+	static readonly OpenEditorsContext = new MenuId();
+	static readonly ProblemsPanelContext = new MenuId();
+	static readonly DebugVariablesContext = new MenuId();
+	static readonly DebugWatchContext = new MenuId();
+	static readonly DebugCallStackContext = new MenuId();
+	static readonly DebugBreakpointsContext = new MenuId();
+	static readonly DebugConsoleContext = new MenuId();
+	static readonly SCMTitle = new MenuId();
+	static readonly SCMSourceControl = new MenuId();
+	static readonly SCMResourceGroupContext = new MenuId();
+	static readonly SCMResourceContext = new MenuId();
+	static readonly SCMChangeContext = new MenuId();
+	static readonly CommandPalette = new MenuId();
+	static readonly ViewTitle = new MenuId();
+	static readonly ViewItemContext = new MenuId();
+	static readonly TouchBarContext = new MenuId();
+	static readonly SearchContext = new MenuId();
 
-	}
+	readonly id: string = String(MenuId.ID++);
+}
 
-	get id(): string {
-		return this._id;
-	}
+export interface IMenuActionOptions {
+	arg?: any;
+	shouldForwardArgs?: boolean;
 }
 
 export interface IMenu extends IDisposable {
 	onDidChange: Event<IMenu>;
-	getActions(arg?: any): [string, MenuItemAction[]][];
+	getActions(options?: IMenuActionOptions): [string, MenuItemAction[]][];
 }
 
 export const IMenuService = createDecorator<IMenuService>('menuService');
@@ -77,7 +90,7 @@ export interface IMenuRegistry {
 	getMenuItems(loc: MenuId): IMenuItem[];
 }
 
-export const MenuRegistry: IMenuRegistry = new class {
+export const MenuRegistry: IMenuRegistry = new class implements IMenuRegistry {
 
 	private _commands: { [id: string]: ICommandAction } = Object.create(null);
 
@@ -142,7 +155,7 @@ export class ExecuteCommandAction extends Action {
 	constructor(
 		id: string,
 		label: string,
-		@ICommandService private _commandService: ICommandService) {
+		@ICommandService private readonly _commandService: ICommandService) {
 
 		super(id, label);
 	}
@@ -154,7 +167,7 @@ export class ExecuteCommandAction extends Action {
 
 export class MenuItemAction extends ExecuteCommandAction {
 
-	private _arg: any;
+	private _options: IMenuActionOptions;
 
 	readonly item: ICommandAction;
 	readonly alt: MenuItemAction;
@@ -162,20 +175,31 @@ export class MenuItemAction extends ExecuteCommandAction {
 	constructor(
 		item: ICommandAction,
 		alt: ICommandAction,
-		arg: any,
+		options: IMenuActionOptions,
+		@IContextKeyService contextKeyService: IContextKeyService,
 		@ICommandService commandService: ICommandService
 	) {
-		super(item.id, item.title, commandService);
-		this._cssClass = item.iconClass;
-		this._enabled = true;
-		this._arg = arg;
+		typeof item.title === 'string' ? super(item.id, item.title, commandService) : super(item.id, item.title.value, commandService);
+		this._cssClass = undefined;
+		this._enabled = !item.precondition || contextKeyService.contextMatchesRules(item.precondition);
+		this._options = options || {};
 
 		this.item = item;
-		this.alt = alt ? new MenuItemAction(alt, undefined, arg, commandService) : undefined;
+		this.alt = alt ? new MenuItemAction(alt, undefined, this._options, contextKeyService, commandService) : undefined;
 	}
 
-	run(): TPromise<any> {
-		return super.run(this._arg);
+	run(...args: any[]): TPromise<any> {
+		let runArgs: any[] = [];
+
+		if (this._options.arg) {
+			runArgs = [...runArgs, this._options.arg];
+		}
+
+		if (this._options.shouldForwardArgs) {
+			runArgs = [...runArgs, ...args];
+		}
+
+		return super.run(...runArgs);
 	}
 }
 

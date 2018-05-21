@@ -7,26 +7,31 @@
 
 'use strict';
 
-if (window.location.search.indexOf('prof-startup') >= 0) {
-	var profiler = require('v8-profiler');
-	profiler.startProfiling('renderer', true);
-}
-
 /*global window,document,define*/
 
+const perf = require('../../../base/common/performance');
+perf.mark('renderer/started');
+
 const path = require('path');
+const fs = require('fs');
 const electron = require('electron');
 const remote = electron.remote;
 const ipc = electron.ipcRenderer;
 
-
 process.lazyEnv = new Promise(function (resolve) {
+	const handle = setTimeout(function () {
+		resolve();
+		console.warn('renderer did not receive lazyEnv in time');
+	}, 10000);
 	ipc.once('vscode:acceptShellEnv', function (event, shellEnv) {
+		clearTimeout(handle);
 		assign(process.env, shellEnv);
 		resolve(process.env);
 	});
-	ipc.send('vscode:fetchShellEnv', remote.getCurrentWindow().id);
+	ipc.send('vscode:fetchShellEnv');
 });
+
+Error.stackTraceLimit = 100; // increase number of stack frames (from 10, https://github.com/v8/v8/wiki/Stack-Trace-API)
 
 function onError(error, enableDeveloperTools) {
 	if (enableDeveloperTools) {
@@ -55,15 +60,6 @@ function parseURLQueryArgs() {
 		.reduce(function (r, param) { r[param[0]] = decodeURIComponent(param[1]); return r; }, {});
 }
 
-function createScript(src, onload) {
-	const script = document.createElement('script');
-	script.src = src;
-	script.addEventListener('load', onload);
-
-	const head = document.getElementsByTagName('head')[0];
-	head.insertBefore(script, head.lastChild);
-}
-
 function uriFromPath(_path) {
 	var pathName = path.resolve(_path).replace(/\\/g, '/');
 	if (pathName.length > 0 && pathName.charAt(0) !== '/') {
@@ -71,6 +67,18 @@ function uriFromPath(_path) {
 	}
 
 	return encodeURI('file://' + pathName);
+}
+
+function readFile(file) {
+	return new Promise(function(resolve, reject) {
+		fs.readFile(file, 'utf8', function(err, data) {
+			if (err) {
+				reject(err);
+				return;
+			}
+			resolve(data);
+		});
+	});
 }
 
 function registerListeners(enableDeveloperTools) {
@@ -102,14 +110,14 @@ function registerListeners(enableDeveloperTools) {
 		window.addEventListener('keydown', listener);
 	}
 
-	process.on('uncaughtException', function (error) { onError(error, enableDeveloperTools) });
+	process.on('uncaughtException', function (error) { onError(error, enableDeveloperTools); });
 
 	return function () {
 		if (listener) {
 			window.removeEventListener('keydown', listener);
 			listener = void 0;
 		}
-	}
+	};
 }
 
 function main() {
@@ -117,8 +125,37 @@ function main() {
 	const args = parseURLQueryArgs();
 	const configuration = JSON.parse(args['config'] || '{}') || {};
 
+	//#region Add support for using node_modules.asar
+	(function () {
+		const path = require('path');
+		const Module = require('module');
+		let NODE_MODULES_PATH = path.join(configuration.appRoot, 'node_modules');
+		if (/[a-z]\:/.test(NODE_MODULES_PATH)) {
+			// Make drive letter uppercase
+			NODE_MODULES_PATH = NODE_MODULES_PATH.charAt(0).toUpperCase() + NODE_MODULES_PATH.substr(1);
+		}
+		const NODE_MODULES_ASAR_PATH = NODE_MODULES_PATH + '.asar';
+
+		const originalResolveLookupPaths = Module._resolveLookupPaths;
+		Module._resolveLookupPaths = function (request, parent, newReturn) {
+			const result = originalResolveLookupPaths(request, parent, newReturn);
+
+			const paths = newReturn ? result : result[1];
+			for (let i = 0, len = paths.length; i < len; i++) {
+				if (paths[i] === NODE_MODULES_PATH) {
+					paths.splice(i, 0, NODE_MODULES_ASAR_PATH);
+					break;
+				}
+			}
+
+			return result;
+		};
+	})();
+	//#endregion
+
 	// Correctly inherit the parent's environment
 	assign(process.env, configuration.userEnv);
+	perf.importEntries(configuration.perfEntries);
 
 	// Get the nls configuration into the process.env as early as possible.
 	var nlsConfig = { availableLanguages: {} };
@@ -130,13 +167,30 @@ function main() {
 		} catch (e) { /*noop*/ }
 	}
 
+	if (nlsConfig._resolvedLanguagePackCoreLocation) {
+		let bundles = Object.create(null);
+		nlsConfig.loadBundle = function(bundle, language, cb) {
+			let result = bundles[bundle];
+			if (result) {
+				cb(undefined, result);
+				return;
+			}
+			let bundleFile = path.join(nlsConfig._resolvedLanguagePackCoreLocation, bundle.replace(/\//g, '!') + '.nls.json');
+			readFile(bundleFile).then(function (content) {
+				let json = JSON.parse(content);
+				bundles[bundle] = json;
+				cb(undefined, json);
+			})
+				.catch(cb);
+		};
+	}
+
 	var locale = nlsConfig.availableLanguages['*'] || 'en';
 	if (locale === 'zh-tw') {
 		locale = 'zh-Hant';
 	} else if (locale === 'zh-cn') {
 		locale = 'zh-Hans';
 	}
-
 	window.document.documentElement.setAttribute('lang', locale);
 
 	const enableDeveloperTools = (process.env['VSCODE_DEV'] || !!configuration.extensionDevelopmentPath) && !configuration.extensionTestsPath;
@@ -144,65 +198,68 @@ function main() {
 
 	// disable pinch zoom & apply zoom level early to avoid glitches
 	const zoomLevel = configuration.zoomLevel;
-	webFrame.setZoomLevelLimits(1, 1);
+	webFrame.setVisualZoomLevelLimits(1, 1);
 	if (typeof zoomLevel === 'number' && zoomLevel !== 0) {
 		webFrame.setZoomLevel(zoomLevel);
 	}
 
 	// Load the loader and start loading the workbench
-	const rootUrl = uriFromPath(configuration.appRoot) + '/out';
+	const loaderFilename = configuration.appRoot + '/out/vs/loader.js';
+	const loaderSource = require('fs').readFileSync(loaderFilename);
+	require('vm').runInThisContext(loaderSource, { filename: loaderFilename });
+	var define = global.define;
+	global.define = undefined;
 
-	// In the bundled version the nls plugin is packaged with the loader so the NLS Plugins
-	// loads as soon as the loader loads. To be able to have pseudo translation
-	createScript(rootUrl + '/vs/loader.js', function () {
-		define('fs', ['original-fs'], function (originalFS) { return originalFS; }); // replace the patched electron fs with the original node fs for all AMD code
+	window.nodeRequire = require.__$__nodeRequire;
 
-		window.MonacoEnvironment = {};
+	define('fs', ['original-fs'], function (originalFS) { return originalFS; }); // replace the patched electron fs with the original node fs for all AMD code
 
-		const nodeCachedDataErrors = window.MonacoEnvironment.nodeCachedDataErrors = [];
-		require.config({
-			baseUrl: rootUrl,
-			'vs/nls': nlsConfig,
-			recordStats: !!configuration.performance,
-			nodeCachedDataDir: configuration.nodeCachedDataDir,
-			onNodeCachedDataError: function (err) { nodeCachedDataErrors.push(err) },
-			nodeModules: [/*BUILD->INSERT_NODE_MODULES*/]
+	window.MonacoEnvironment = {};
+
+	const onNodeCachedData = window.MonacoEnvironment.onNodeCachedData = [];
+	require.config({
+		baseUrl: uriFromPath(configuration.appRoot) + '/out',
+		'vs/nls': nlsConfig,
+		recordStats: !!configuration.performance,
+		nodeCachedDataDir: configuration.nodeCachedDataDir,
+		onNodeCachedData: function () { onNodeCachedData.push(arguments); },
+		nodeModules: [/*BUILD->INSERT_NODE_MODULES*/]
+	});
+
+	if (nlsConfig.pseudo) {
+		require(['vs/nls'], function (nlsPlugin) {
+			nlsPlugin.setPseudoTranslation(nlsConfig.pseudo);
 		});
+	}
 
-		if (nlsConfig.pseudo) {
-			require(['vs/nls'], function (nlsPlugin) {
-				nlsPlugin.setPseudoTranslation(nlsConfig.pseudo);
-			});
-		}
+	// Perf Counters
+	window.MonacoEnvironment.timers = {
+		isInitialStartup: !!configuration.isInitialStartup,
+		hasAccessibilitySupport: !!configuration.accessibilitySupport,
+		start: configuration.perfStartTime,
+		windowLoad: configuration.perfWindowLoadTime
+	};
 
-		// Perf Counters
-		const timers = window.MonacoEnvironment.timers = {
-			isInitialStartup: !!configuration.isInitialStartup,
-			hasAccessibilitySupport: !!configuration.accessibilitySupport,
-			start: new Date(configuration.perfStartTime),
-			appReady: new Date(configuration.perfAppReady),
-			windowLoad: new Date(configuration.perfWindowLoadTime),
-			beforeLoadWorkbenchMain: new Date()
-		};
+	perf.mark('willLoadWorkbenchMain');
+	require([
+		'vs/workbench/workbench.main',
+		'vs/nls!vs/workbench/workbench.main',
+		'vs/css!vs/workbench/workbench.main'
+	], function () {
+		perf.mark('didLoadWorkbenchMain');
 
-		require([
-			'vs/workbench/electron-browser/workbench.main',
-			'vs/nls!vs/workbench/electron-browser/workbench.main',
-			'vs/css!vs/workbench/electron-browser/workbench.main'
-		], function () {
-			timers.afterLoadWorkbenchMain = new Date();
-
-			process.lazyEnv.then(function () {
-				require('vs/workbench/electron-browser/main')
-					.startup(configuration)
-					.done(function () {
-						unbind(); // since the workbench is running, unbind our developer related listeners and let the workbench handle them
-					}, function (error) {
-						onError(error, enableDeveloperTools);
-					});
-			});
+		process.lazyEnv.then(function () {
+			perf.mark('main/startup');
+			require('vs/workbench/electron-browser/main')
+				.startup(configuration)
+				.done(function () {
+					unbind(); // since the workbench is running, unbind our developer related listeners and let the workbench handle them
+				}, function (error) {
+					onError(error, enableDeveloperTools);
+				});
 		});
 	});
+
 }
 
 main();

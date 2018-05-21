@@ -5,11 +5,11 @@
 
 'use strict';
 
-import { IDisposable, toDisposable, empty as EmptyDisposable } from 'vs/base/common/lifecycle';
-import Event, { Emitter } from 'vs/base/common/event';
-import { memoize } from 'vs/base/common/decorators';
-import { IContextKeyService, IContextKey } from 'vs/platform/contextkey/common/contextkey';
-import { ISCMService, ISCMProvider, ISCMInput } from './scm';
+import { IDisposable, toDisposable } from 'vs/base/common/lifecycle';
+import { Event, Emitter } from 'vs/base/common/event';
+import { ISCMService, ISCMProvider, ISCMInput, ISCMRepository, IInputValidator } from './scm';
+import { ILogService } from 'vs/platform/log/common/log';
+import { TPromise } from 'vs/base/common/winjs.base';
 
 class SCMInput implements ISCMInput {
 
@@ -26,80 +26,99 @@ class SCMInput implements ISCMInput {
 
 	private _onDidChange = new Emitter<string>();
 	get onDidChange(): Event<string> { return this._onDidChange.event; }
+
+	private _placeholder = '';
+
+	get placeholder(): string {
+		return this._placeholder;
+	}
+
+	set placeholder(placeholder: string) {
+		this._placeholder = placeholder;
+		this._onDidChangePlaceholder.fire(placeholder);
+	}
+
+	private _onDidChangePlaceholder = new Emitter<string>();
+	get onDidChangePlaceholder(): Event<string> { return this._onDidChangePlaceholder.event; }
+
+	private _validateInput: IInputValidator = () => TPromise.as(undefined);
+
+	get validateInput(): IInputValidator {
+		return this._validateInput;
+	}
+
+	set validateInput(validateInput: IInputValidator) {
+		this._validateInput = validateInput;
+		this._onDidChangeValidateInput.fire();
+	}
+
+	private _onDidChangeValidateInput = new Emitter<void>();
+	get onDidChangeValidateInput(): Event<void> { return this._onDidChangeValidateInput.event; }
+}
+
+class SCMRepository implements ISCMRepository {
+
+	private _onDidFocus = new Emitter<void>();
+	readonly onDidFocus: Event<void> = this._onDidFocus.event;
+
+	readonly input: ISCMInput = new SCMInput();
+
+	constructor(
+		public readonly provider: ISCMProvider,
+		private disposable: IDisposable
+	) { }
+
+	focus(): void {
+		this._onDidFocus.fire();
+	}
+
+	dispose(): void {
+		this.disposable.dispose();
+		this.provider.dispose();
+	}
 }
 
 export class SCMService implements ISCMService {
 
-	_serviceBrand;
+	_serviceBrand: any;
 
-	private providerChangeDisposable: IDisposable = EmptyDisposable;
-	private activeProviderContextKey: IContextKey<string | undefined>;
-	private activeProviderStateContextKey: IContextKey<string | undefined>;
+	private _providerIds = new Set<string>();
+	private _repositories: ISCMRepository[] = [];
+	get repositories(): ISCMRepository[] { return [...this._repositories]; }
 
-	private _activeProvider: ISCMProvider | undefined;
+	private _onDidAddProvider = new Emitter<ISCMRepository>();
+	get onDidAddRepository(): Event<ISCMRepository> { return this._onDidAddProvider.event; }
 
-	get activeProvider(): ISCMProvider | undefined {
-		return this._activeProvider;
-	}
+	private _onDidRemoveProvider = new Emitter<ISCMRepository>();
+	get onDidRemoveRepository(): Event<ISCMRepository> { return this._onDidRemoveProvider.event; }
 
-	set activeProvider(provider: ISCMProvider | undefined) {
-		if (!provider) {
-			throw new Error('invalid provider');
+	constructor(@ILogService private logService: ILogService) { }
+
+	registerSCMProvider(provider: ISCMProvider): ISCMRepository {
+		this.logService.trace('SCMService#registerSCMProvider');
+
+		if (this._providerIds.has(provider.id)) {
+			throw new Error(`SCM Provider ${provider.id} already exists.`);
 		}
 
-		if (provider && this._providers.indexOf(provider) === -1) {
-			throw new Error('Provider not registered');
-		}
+		this._providerIds.add(provider.id);
 
-		this._activeProvider = provider;
-		this.activeProviderContextKey.set(provider ? provider.id : void 0);
-
-		this.providerChangeDisposable.dispose();
-		this.providerChangeDisposable = provider.onDidChange(this.onDidChangeProviderState, this);
-		this.onDidChangeProviderState();
-
-		this._onDidChangeProvider.fire(provider);
-	}
-
-	private _providers: ISCMProvider[] = [];
-	get providers(): ISCMProvider[] { return [...this._providers]; }
-
-	private _onDidChangeProvider = new Emitter<ISCMProvider>();
-	get onDidChangeProvider(): Event<ISCMProvider> { return this._onDidChangeProvider.event; }
-
-	@memoize
-	get input(): ISCMInput { return new SCMInput(); }
-
-	constructor(
-		@IContextKeyService contextKeyService: IContextKeyService
-	) {
-		this.activeProviderContextKey = contextKeyService.createKey<string | undefined>('scmProvider', void 0);
-		this.activeProviderStateContextKey = contextKeyService.createKey<string | undefined>('scmProviderState', void 0);
-	}
-
-	registerSCMProvider(provider: ISCMProvider): IDisposable {
-		this._providers = [provider, ...this._providers];
-
-		if (this._providers.length === 1) {
-			this.activeProvider = provider;
-		}
-
-		return toDisposable(() => {
-			const index = this._providers.indexOf(provider);
+		const disposable = toDisposable(() => {
+			const index = this._repositories.indexOf(repository);
 
 			if (index < 0) {
 				return;
 			}
 
-			this._providers.splice(index, 1);
-
-			if (this.activeProvider === provider) {
-				this.activeProvider = this._providers[0];
-			}
+			this._providerIds.delete(provider.id);
+			this._repositories.splice(index, 1);
+			this._onDidRemoveProvider.fire(repository);
 		});
-	}
 
-	private onDidChangeProviderState(): void {
-		this.activeProviderStateContextKey.set(this.activeProvider.state);
+		const repository = new SCMRepository(provider, disposable);
+		this._repositories.push(repository);
+		this._onDidAddProvider.fire(repository);
+
+		return repository;
 	}
 }

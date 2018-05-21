@@ -9,21 +9,18 @@ import uri from 'vs/base/common/uri';
 import { wireCancellationToken } from 'vs/base/common/async';
 import { TPromise } from 'vs/base/common/winjs.base';
 import * as errors from 'vs/base/common/errors';
-import * as lifecycle from 'vs/base/common/lifecycle';
 import { IAction } from 'vs/base/common/actions';
-import { Dimension, Builder } from 'vs/base/browser/builder';
 import * as dom from 'vs/base/browser/dom';
 import { isMacintosh } from 'vs/base/common/platform';
 import { CancellationToken } from 'vs/base/common/cancellation';
 import { KeyCode } from 'vs/base/common/keyCodes';
 import { ITree, ITreeOptions } from 'vs/base/parts/tree/browser/tree';
-import { Tree } from 'vs/base/parts/tree/browser/treeImpl';
-import { Context as SuggestContext } from 'vs/editor/contrib/suggest/common/suggest';
-import { SuggestController } from 'vs/editor/contrib/suggest/browser/suggestController';
-import { IEditorOptions, IReadOnlyModel, EditorContextKeys, ICommonCodeEditor } from 'vs/editor/common/editorCommon';
+import { Context as SuggestContext } from 'vs/editor/contrib/suggest/suggest';
+import { SuggestController } from 'vs/editor/contrib/suggest/suggestController';
+import { ITextModel } from 'vs/editor/common/model';
 import { Position } from 'vs/editor/common/core/position';
 import * as modes from 'vs/editor/common/modes';
-import { editorAction, ServicesAccessor, EditorAction, EditorCommand, CommonEditorRegistry } from 'vs/editor/common/editorCommonExtensions';
+import { registerEditorAction, ServicesAccessor, EditorAction, EditorCommand, registerEditorCommand } from 'vs/editor/browser/editorExtensions';
 import { IModelService } from 'vs/editor/common/services/modelService';
 import { MenuId } from 'vs/platform/actions/common/actions';
 import { ServiceCollection } from 'vs/platform/instantiation/common/serviceCollection';
@@ -32,21 +29,27 @@ import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { IInstantiationService, createDecorator } from 'vs/platform/instantiation/common/instantiation';
 import { IStorageService, StorageScope } from 'vs/platform/storage/common/storage';
 import { ReplExpressionsRenderer, ReplExpressionsController, ReplExpressionsDataSource, ReplExpressionsActionProvider, ReplExpressionsAccessibilityProvider } from 'vs/workbench/parts/debug/electron-browser/replViewer';
-import { ReplInputEditor } from 'vs/workbench/parts/debug/electron-browser/replEditor';
-import * as debug from 'vs/workbench/parts/debug/common/debug';
+import { SimpleDebugEditor } from 'vs/workbench/parts/debug/electron-browser/simpleDebugEditor';
 import { ClearReplAction } from 'vs/workbench/parts/debug/browser/debugActions';
 import { ReplHistory } from 'vs/workbench/parts/debug/common/replHistory';
 import { Panel } from 'vs/workbench/browser/panel';
-import { IWorkbenchThemeService } from 'vs/workbench/services/themes/common/themeService';
 import { IPanelService } from 'vs/workbench/services/panel/common/panelService';
-import { IListService } from 'vs/platform/list/browser/listService';
+import { IThemeService } from 'vs/platform/theme/common/themeService';
+import { clipboard } from 'electron';
+import { ICodeEditor } from 'vs/editor/browser/editorBrowser';
+import { WorkbenchTree } from 'vs/platform/list/browser/listService';
+import { memoize } from 'vs/base/common/decorators';
+import { dispose } from 'vs/base/common/lifecycle';
+import { OpenMode, ClickBehavior } from 'vs/base/parts/tree/browser/treeDefaults';
+import { EditorContextKeys } from 'vs/editor/common/editorContextKeys';
+import { CodeEditorWidget } from 'vs/editor/browser/widget/codeEditorWidget';
+import { IDebugService, REPL_ID, DEBUG_SCHEME, CONTEXT_ON_FIRST_DEBUG_REPL_LINE, CONTEXT_IN_DEBUG_REPL, CONTEXT_ON_LAST_DEBUG_REPL_LINE } from 'vs/workbench/parts/debug/common/debug';
 
 const $ = dom.$;
 
 const replTreeOptions: ITreeOptions = {
 	twistiePixels: 20,
-	ariaLabel: nls.localize('replAriaLabel', "Read Eval Print Loop Panel"),
-	keyboardSupport: false
+	ariaLabel: nls.localize('replAriaLabel', "Read Eval Print Loop Panel")
 };
 
 const HISTORY_STORAGE_KEY = 'debug.repl.history';
@@ -56,54 +59,52 @@ export interface IPrivateReplService {
 	_serviceBrand: any;
 	navigateHistory(previous: boolean): void;
 	acceptReplInput(): void;
+	getVisibleContent(): string;
 }
 
 export class Repl extends Panel implements IPrivateReplService {
 	public _serviceBrand: any;
 
-	private static HALF_WIDTH_TYPICAL = 'n';
+	private static readonly HALF_WIDTH_TYPICAL = 'n';
 
 	private static HISTORY: ReplHistory;
-	private static REFRESH_DELAY = 500; // delay in ms to refresh the repl for new elements to show
-	private static REPL_INPUT_INITIAL_HEIGHT = 19;
-	private static REPL_INPUT_MAX_HEIGHT = 170;
+	private static readonly REFRESH_DELAY = 500; // delay in ms to refresh the repl for new elements to show
+	private static readonly REPL_INPUT_INITIAL_HEIGHT = 19;
+	private static readonly REPL_INPUT_MAX_HEIGHT = 170;
 
-	private toDispose: lifecycle.IDisposable[];
 	private tree: ITree;
 	private renderer: ReplExpressionsRenderer;
-	private characterWidthSurveyor: HTMLElement;
+	private container: HTMLElement;
 	private treeContainer: HTMLElement;
-	private replInput: ReplInputEditor;
+	private replInput: CodeEditorWidget;
 	private replInputContainer: HTMLElement;
 	private refreshTimeoutHandle: number;
 	private actions: IAction[];
-	private dimension: Dimension;
+	private dimension: dom.Dimension;
 	private replInputHeight: number;
+	private model: ITextModel;
 
 	constructor(
-		@debug.IDebugService private debugService: debug.IDebugService,
+		@IDebugService private debugService: IDebugService,
 		@ITelemetryService telemetryService: ITelemetryService,
 		@IInstantiationService private instantiationService: IInstantiationService,
 		@IStorageService private storageService: IStorageService,
 		@IPanelService private panelService: IPanelService,
-		@IWorkbenchThemeService protected themeService: IWorkbenchThemeService,
+		@IThemeService protected themeService: IThemeService,
 		@IModelService private modelService: IModelService,
-		@IContextKeyService private contextKeyService: IContextKeyService,
-		@IListService private listService: IListService
+		@IContextKeyService private contextKeyService: IContextKeyService
 	) {
-		super(debug.REPL_ID, telemetryService, themeService);
+		super(REPL_ID, telemetryService, themeService);
 
 		this.replInputHeight = Repl.REPL_INPUT_INITIAL_HEIGHT;
-		this.toDispose = [];
 		this.registerListeners();
 	}
 
 	private registerListeners(): void {
-		this.toDispose.push(this.debugService.getModel().onDidChangeReplElements(() => {
+		this.toUnbind.push(this.debugService.getModel().onDidChangeReplElements(() => {
 			this.refreshReplElements(this.debugService.getModel().getReplElements().length === 0);
 		}));
-		this.toDispose.push(this.themeService.onDidColorThemeChange(e => this.replInput.updateOptions(this.getReplInputOptions()))); // TODO@theme this should be done from the editor itself and not from the outside
-		this.toDispose.push(this.panelService.onDidPanelOpen(panel => this.refreshReplElements(true)));
+		this.toUnbind.push(this.panelService.onDidPanelOpen(panel => this.refreshReplElements(true)));
 	}
 
 	private refreshReplElements(noDelay: boolean): void {
@@ -117,7 +118,7 @@ export class Repl extends Panel implements IPrivateReplService {
 				this.refreshTimeoutHandle = null;
 				const previousScrollPosition = this.tree.getScrollPosition();
 				this.tree.refresh().then(() => {
-					if (previousScrollPosition === 1 || previousScrollPosition === 0) {
+					if (previousScrollPosition === 1) {
 						// Only scroll if we were scrolled all the way down before tree refreshed #10486
 						this.tree.setScrollPosition(1);
 					}
@@ -126,31 +127,22 @@ export class Repl extends Panel implements IPrivateReplService {
 		}
 	}
 
-	public create(parent: Builder): TPromise<void> {
+	public create(parent: HTMLElement): TPromise<void> {
 		super.create(parent);
-		const container = dom.append(parent.getHTMLElement(), $('.repl'));
-		this.treeContainer = dom.append(container, $('.repl-tree'));
-		this.createReplInput(container);
-
-		this.characterWidthSurveyor = dom.append(container, $('.surveyor'));
-		this.characterWidthSurveyor.textContent = Repl.HALF_WIDTH_TYPICAL;
-		for (let i = 0; i < 10; i++) {
-			this.characterWidthSurveyor.textContent += this.characterWidthSurveyor.textContent;
-		}
-		this.characterWidthSurveyor.style.fontSize = isMacintosh ? '12px' : '14px';
+		this.container = dom.append(parent, $('.repl'));
+		this.treeContainer = dom.append(this.container, $('.repl-tree'));
+		this.createReplInput(this.container);
 
 		this.renderer = this.instantiationService.createInstance(ReplExpressionsRenderer);
-		const controller = this.instantiationService.createInstance(ReplExpressionsController, new ReplExpressionsActionProvider(this.instantiationService), MenuId.DebugConsoleContext);
+		const controller = this.instantiationService.createInstance(ReplExpressionsController, new ReplExpressionsActionProvider(this.instantiationService, this.replInput), MenuId.DebugConsoleContext, { openMode: OpenMode.SINGLE_CLICK, clickBehavior: ClickBehavior.ON_MOUSE_UP /* do not change, to preserve focus behaviour in input field */ });
 		controller.toFocusOnClick = this.replInput;
 
-		this.tree = new Tree(this.treeContainer, {
+		this.tree = this.instantiationService.createInstance(WorkbenchTree, this.treeContainer, {
 			dataSource: new ReplExpressionsDataSource(),
 			renderer: this.renderer,
 			accessibilityProvider: new ReplExpressionsAccessibilityProvider(),
 			controller
 		}, replTreeOptions);
-
-		this.toDispose.push(this.listService.register(this.tree));
 
 		if (!Repl.HISTORY) {
 			Repl.HISTORY = new ReplHistory(JSON.parse(this.storageService.get(HISTORY_STORAGE_KEY, StorageScope.WORKSPACE, '[]')));
@@ -159,53 +151,62 @@ export class Repl extends Panel implements IPrivateReplService {
 		return this.tree.setInput(this.debugService.getModel());
 	}
 
+	public setVisible(visible: boolean): TPromise<void> {
+		if (!visible) {
+			dispose(this.model);
+		} else {
+			this.model = this.modelService.createModel('', null, uri.parse(`${DEBUG_SCHEME}:input`), true);
+			this.replInput.setModel(this.model);
+		}
+
+		return super.setVisible(visible);
+	}
+
 	private createReplInput(container: HTMLElement): void {
 		this.replInputContainer = dom.append(container, $('.repl-input-wrapper'));
 
 		const scopedContextKeyService = this.contextKeyService.createScoped(this.replInputContainer);
-		this.toDispose.push(scopedContextKeyService);
-		debug.CONTEXT_IN_DEBUG_REPL.bindTo(scopedContextKeyService).set(true);
-		const onFirstReplLine = debug.CONTEXT_ON_FIRST_DEBUG_REPL_LINE.bindTo(scopedContextKeyService);
+		this.toUnbind.push(scopedContextKeyService);
+		CONTEXT_IN_DEBUG_REPL.bindTo(scopedContextKeyService).set(true);
+		const onFirstReplLine = CONTEXT_ON_FIRST_DEBUG_REPL_LINE.bindTo(scopedContextKeyService);
 		onFirstReplLine.set(true);
-		const onLastReplLine = debug.CONTEXT_ON_LAST_DEBUG_REPL_LINE.bindTo(scopedContextKeyService);
+		const onLastReplLine = CONTEXT_ON_LAST_DEBUG_REPL_LINE.bindTo(scopedContextKeyService);
 		onLastReplLine.set(true);
 
 		const scopedInstantiationService = this.instantiationService.createChild(new ServiceCollection(
 			[IContextKeyService, scopedContextKeyService], [IPrivateReplService, this]));
-		this.replInput = scopedInstantiationService.createInstance(ReplInputEditor, this.replInputContainer, this.getReplInputOptions());
-		const model = this.modelService.createModel('', null, uri.parse(`${debug.DEBUG_SCHEME}:input`));
-		this.replInput.setModel(model);
+		this.replInput = scopedInstantiationService.createInstance(CodeEditorWidget, this.replInputContainer, SimpleDebugEditor.getEditorOptions(), SimpleDebugEditor.getCodeEditorWidgetOptions());
 
-		modes.SuggestRegistry.register({ scheme: debug.DEBUG_SCHEME }, {
+		modes.SuggestRegistry.register({ scheme: DEBUG_SCHEME, hasAccessToAllModels: true }, {
 			triggerCharacters: ['.'],
-			provideCompletionItems: (model: IReadOnlyModel, position: Position, token: CancellationToken): Thenable<modes.ISuggestResult> => {
+			provideCompletionItems: (model: ITextModel, position: Position, _context: modes.SuggestContext, token: CancellationToken): Thenable<modes.ISuggestResult> => {
 				const word = this.replInput.getModel().getWordAtPosition(position);
 				const overwriteBefore = word ? word.word.length : 0;
 				const text = this.replInput.getModel().getLineContent(position.lineNumber);
 				const focusedStackFrame = this.debugService.getViewModel().focusedStackFrame;
 				const frameId = focusedStackFrame ? focusedStackFrame.frameId : undefined;
-				const focusedProcess = this.debugService.getViewModel().focusedProcess;
-				const completions = focusedProcess ? focusedProcess.completions(frameId, text, position, overwriteBefore) : TPromise.as([]);
+				const focusedSession = this.debugService.getViewModel().focusedSession;
+				const completions = focusedSession ? focusedSession.completions(frameId, text, position, overwriteBefore) : TPromise.as([]);
 				return wireCancellationToken(token, completions.then(suggestions => ({
 					suggestions
 				})));
 			}
 		});
 
-		this.toDispose.push(this.replInput.onDidScrollChange(e => {
+		this.toUnbind.push(this.replInput.onDidScrollChange(e => {
 			if (!e.scrollHeightChanged) {
 				return;
 			}
 			this.replInputHeight = Math.max(Repl.REPL_INPUT_INITIAL_HEIGHT, Math.min(Repl.REPL_INPUT_MAX_HEIGHT, e.scrollHeight, this.dimension.height));
 			this.layout(this.dimension);
 		}));
-		this.toDispose.push(this.replInput.onDidChangeCursorPosition(e => {
+		this.toUnbind.push(this.replInput.onDidChangeCursorPosition(e => {
 			onFirstReplLine.set(e.position.lineNumber === 1);
 			onLastReplLine.set(e.position.lineNumber === this.replInput.getModel().getLineCount());
 		}));
 
-		this.toDispose.push(dom.addStandardDisposableListener(this.replInputContainer, dom.EventType.FOCUS, () => dom.addClass(this.replInputContainer, 'synthetic-focus')));
-		this.toDispose.push(dom.addStandardDisposableListener(this.replInputContainer, dom.EventType.BLUR, () => dom.removeClass(this.replInputContainer, 'synthetic-focus')));
+		this.toUnbind.push(dom.addStandardDisposableListener(this.replInputContainer, dom.EventType.FOCUS, () => dom.addClass(this.replInputContainer, 'synthetic-focus')));
+		this.toUnbind.push(dom.addStandardDisposableListener(this.replInputContainer, dom.EventType.BLUR, () => dom.removeClass(this.replInputContainer, 'synthetic-focus')));
 	}
 
 	public navigateHistory(previous: boolean): void {
@@ -227,10 +228,24 @@ export class Repl extends Panel implements IPrivateReplService {
 		this.layout(this.dimension);
 	}
 
-	public layout(dimension: Dimension): void {
+	public getVisibleContent(): string {
+		let text = '';
+		const navigator = this.tree.getNavigator();
+		// skip first navigator element - the root node
+		while (navigator.next()) {
+			if (text) {
+				text += `\n`;
+			}
+			text += navigator.current().toString();
+		}
+
+		return text;
+	}
+
+	public layout(dimension: dom.Dimension): void {
 		this.dimension = dimension;
 		if (this.tree) {
-			this.renderer.setWidth(dimension.width - 25, this.characterWidthSurveyor.clientWidth / this.characterWidthSurveyor.textContent.length);
+			this.renderer.setWidth(dimension.width - 25, this.characterWidth);
 			const treeHeight = dimension.height - this.replInputHeight;
 			this.treeContainer.style.height = `${treeHeight}px`;
 			this.tree.layout(treeHeight);
@@ -238,6 +253,18 @@ export class Repl extends Panel implements IPrivateReplService {
 		this.replInputContainer.style.height = `${this.replInputHeight}px`;
 
 		this.replInput.layout({ width: dimension.width - 20, height: this.replInputHeight });
+	}
+
+	@memoize
+	private get characterWidth(): number {
+		const characterWidthSurveyor = dom.append(this.container, $('.surveyor'));
+		characterWidthSurveyor.textContent = Repl.HALF_WIDTH_TYPICAL;
+		for (let i = 0; i < 10; i++) {
+			characterWidthSurveyor.textContent += characterWidthSurveyor.textContent;
+		}
+		characterWidthSurveyor.style.fontSize = isMacintosh ? '12px' : '14px';
+
+		return characterWidthSurveyor.clientWidth / characterWidthSurveyor.textContent.length;
 	}
 
 	public focus(): void {
@@ -251,7 +278,7 @@ export class Repl extends Panel implements IPrivateReplService {
 			];
 
 			this.actions.forEach(a => {
-				this.toDispose.push(a);
+				this.toUnbind.push(a);
 			});
 		}
 
@@ -259,37 +286,20 @@ export class Repl extends Panel implements IPrivateReplService {
 	}
 
 	public shutdown(): void {
-		this.storageService.store(HISTORY_STORAGE_KEY, JSON.stringify(Repl.HISTORY.save()), StorageScope.WORKSPACE);
-	}
-
-	private getReplInputOptions(): IEditorOptions {
-		return {
-			wordWrap: 'on',
-			overviewRulerLanes: 0,
-			glyphMargin: false,
-			lineNumbers: 'off',
-			folding: false,
-			selectOnLineNumbers: false,
-			selectionHighlight: false,
-			scrollbar: {
-				horizontal: 'hidden'
-			},
-			lineDecorationsWidth: 0,
-			scrollBeyondLastLine: false,
-			theme: this.themeService.getColorTheme().id,
-			renderLineHighlight: 'none',
-			fixedOverflowWidgets: true
-		};
+		const replHistory = Repl.HISTORY.save();
+		if (replHistory.length) {
+			this.storageService.store(HISTORY_STORAGE_KEY, JSON.stringify(replHistory), StorageScope.WORKSPACE);
+		} else {
+			this.storageService.remove(HISTORY_STORAGE_KEY, StorageScope.WORKSPACE);
+		}
 	}
 
 	public dispose(): void {
-		this.replInput.destroy();
-		this.toDispose = lifecycle.dispose(this.toDispose);
+		this.replInput.dispose();
 		super.dispose();
 	}
 }
 
-@editorAction
 class ReplHistoryPreviousAction extends EditorAction {
 
 	constructor() {
@@ -297,9 +307,9 @@ class ReplHistoryPreviousAction extends EditorAction {
 			id: 'repl.action.historyPrevious',
 			label: nls.localize('actions.repl.historyPrevious', "History Previous"),
 			alias: 'History Previous',
-			precondition: debug.CONTEXT_IN_DEBUG_REPL,
+			precondition: CONTEXT_IN_DEBUG_REPL,
 			kbOpts: {
-				kbExpr: ContextKeyExpr.and(EditorContextKeys.TextFocus, debug.CONTEXT_ON_FIRST_DEBUG_REPL_LINE),
+				kbExpr: CONTEXT_ON_FIRST_DEBUG_REPL_LINE,
 				primary: KeyCode.UpArrow,
 				weight: 50
 			},
@@ -309,12 +319,11 @@ class ReplHistoryPreviousAction extends EditorAction {
 		});
 	}
 
-	public run(accessor: ServicesAccessor, editor: ICommonCodeEditor): void | TPromise<void> {
+	public run(accessor: ServicesAccessor, editor: ICodeEditor): void | TPromise<void> {
 		accessor.get(IPrivateReplService).navigateHistory(true);
 	}
 }
 
-@editorAction
 class ReplHistoryNextAction extends EditorAction {
 
 	constructor() {
@@ -322,9 +331,9 @@ class ReplHistoryNextAction extends EditorAction {
 			id: 'repl.action.historyNext',
 			label: nls.localize('actions.repl.historyNext', "History Next"),
 			alias: 'History Next',
-			precondition: debug.CONTEXT_IN_DEBUG_REPL,
+			precondition: CONTEXT_IN_DEBUG_REPL,
 			kbOpts: {
-				kbExpr: ContextKeyExpr.and(EditorContextKeys.TextFocus, debug.CONTEXT_ON_LAST_DEBUG_REPL_LINE),
+				kbExpr: CONTEXT_ON_LAST_DEBUG_REPL_LINE,
 				primary: KeyCode.DownArrow,
 				weight: 50
 			},
@@ -334,12 +343,11 @@ class ReplHistoryNextAction extends EditorAction {
 		});
 	}
 
-	public run(accessor: ServicesAccessor, editor: ICommonCodeEditor): void | TPromise<void> {
+	public run(accessor: ServicesAccessor, editor: ICodeEditor): void | TPromise<void> {
 		accessor.get(IPrivateReplService).navigateHistory(false);
 	}
 }
 
-@editorAction
 class AcceptReplInputAction extends EditorAction {
 
 	constructor() {
@@ -347,28 +355,49 @@ class AcceptReplInputAction extends EditorAction {
 			id: 'repl.action.acceptInput',
 			label: nls.localize({ key: 'actions.repl.acceptInput', comment: ['Apply input from the debug console input box'] }, "REPL Accept Input"),
 			alias: 'REPL Accept Input',
-			precondition: debug.CONTEXT_IN_DEBUG_REPL,
+			precondition: CONTEXT_IN_DEBUG_REPL,
 			kbOpts: {
-				kbExpr: EditorContextKeys.TextFocus,
+				kbExpr: EditorContextKeys.textInputFocus,
 				primary: KeyCode.Enter
 			}
 		});
 	}
 
-	public run(accessor: ServicesAccessor, editor: ICommonCodeEditor): void | TPromise<void> {
+	public run(accessor: ServicesAccessor, editor: ICodeEditor): void | TPromise<void> {
 		SuggestController.get(editor).acceptSelectedSuggestion();
 		accessor.get(IPrivateReplService).acceptReplInput();
 	}
 }
 
+export class ReplCopyAllAction extends EditorAction {
+
+	constructor() {
+		super({
+			id: 'repl.action.copyAll',
+			label: nls.localize('actions.repl.copyAll', "Debug: Console Copy All"),
+			alias: 'Debug Console Copy All',
+			precondition: CONTEXT_IN_DEBUG_REPL,
+		});
+	}
+
+	public run(accessor: ServicesAccessor, editor: ICodeEditor): void | TPromise<void> {
+		clipboard.writeText(accessor.get(IPrivateReplService).getVisibleContent());
+	}
+}
+
+registerEditorAction(ReplHistoryPreviousAction);
+registerEditorAction(ReplHistoryNextAction);
+registerEditorAction(AcceptReplInputAction);
+registerEditorAction(ReplCopyAllAction);
+
 const SuggestCommand = EditorCommand.bindToContribution<SuggestController>(SuggestController.get);
-CommonEditorRegistry.registerEditorCommand(new SuggestCommand({
+registerEditorCommand(new SuggestCommand({
 	id: 'repl.action.acceptSuggestion',
-	precondition: ContextKeyExpr.and(debug.CONTEXT_IN_DEBUG_REPL, SuggestContext.Visible),
+	precondition: ContextKeyExpr.and(CONTEXT_IN_DEBUG_REPL, SuggestContext.Visible),
 	handler: x => x.acceptSelectedSuggestion(),
 	kbOpts: {
 		weight: 50,
-		kbExpr: EditorContextKeys.TextFocus,
+		kbExpr: EditorContextKeys.textInputFocus,
 		primary: KeyCode.RightArrow
 	}
 }));

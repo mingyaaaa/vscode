@@ -2,13 +2,13 @@
 
 if [[ "$OSTYPE" == "darwin"* ]]; then
 	realpath() { [[ $1 = /* ]] && echo "$1" || echo "$PWD/${1#./}"; }
-	ROOT=$(dirname $(dirname $(realpath "$0")))
+	ROOT=$(dirname "$(dirname "$(realpath "$0")")")
 else
-	ROOT=$(dirname $(dirname $(readlink -f $0)))
+	ROOT=$(dirname "$(dirname "$(readlink -f $0)")")
 fi
 
 function code() {
-	cd $ROOT
+	cd "$ROOT"
 
 	if [[ "$OSTYPE" == "darwin"* ]]; then
 		NAME=`node -p "require('./product.json').nameLong"`
@@ -18,14 +18,20 @@ function code() {
 		CODE=".build/electron/$NAME"
 	fi
 
-	INTENDED_VERSION="v`node -p "require('./package.json').electronVersion"`"
-	INSTALLED_VERSION=`cat .build/electron/version 2> /dev/null`
-
 	# Node modules
-	test -d node_modules || ./scripts/npm.sh install
+	test -d node_modules || yarn
 
 	# Get electron
-	(test -f "$CODE" && [ $INTENDED_VERSION == $INSTALLED_VERSION ]) || ./node_modules/.bin/gulp electron
+	node build/lib/electron.js || ./node_modules/.bin/gulp electron
+
+	# Manage built-in extensions
+	if [[ "$1" == "--builtin" ]]; then
+		exec "$CODE" build/builtin
+		return
+	fi
+
+	# Sync built-in extensions
+	node build/lib/builtInExtensions.js
 
 	# Build
 	test -d out || ./node_modules/.bin/gulp compile

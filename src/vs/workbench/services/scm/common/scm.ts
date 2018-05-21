@@ -8,8 +8,11 @@
 import { TPromise } from 'vs/base/common/winjs.base';
 import URI from 'vs/base/common/uri';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
-import Event from 'vs/base/common/event';
+import { Event } from 'vs/base/common/event';
 import { IDisposable } from 'vs/base/common/lifecycle';
+import { Command } from 'vs/editor/common/modes';
+import { ColorIdentifier } from 'vs/platform/theme/common/colorRegistry';
+import { ISequence } from 'vs/base/common/sequence';
 
 export interface IBaselineResourceProvider {
 	getBaselineResource(resource: URI): TPromise<URI>;
@@ -20,47 +23,91 @@ export const ISCMService = createDecorator<ISCMService>('scm');
 export interface ISCMResourceDecorations {
 	icon?: URI;
 	iconDark?: URI;
+	tooltip?: string;
 	strikeThrough?: boolean;
+	faded?: boolean;
+
+	source?: string;
+	letter?: string;
+	color?: ColorIdentifier;
 }
 
 export interface ISCMResource {
-	readonly resourceGroupId: string;
-	readonly uri: URI;
+	readonly resourceGroup: ISCMResourceGroup;
+	readonly sourceUri: URI;
 	readonly decorations: ISCMResourceDecorations;
+	open(): TPromise<void>;
 }
 
-export interface ISCMResourceGroup {
-	readonly id: string;
+export interface ISCMResourceGroup extends ISequence<ISCMResource> {
+	readonly provider: ISCMProvider;
 	readonly label: string;
-	readonly resources: ISCMResource[];
+	readonly id: string;
+	readonly hideWhenEmpty: boolean;
+	readonly onDidChange: Event<void>;
 }
 
 export interface ISCMProvider extends IDisposable {
-	readonly id: string;
 	readonly label: string;
-	readonly resources: ISCMResourceGroup[];
-	readonly onDidChange: Event<ISCMResourceGroup[]>;
-	readonly count?: number;
-	readonly state?: string;
+	readonly id: string;
+	readonly contextValue: string;
 
-	open(uri: ISCMResource): TPromise<void>;
-	acceptChanges(): TPromise<void>;
-	drag(from: ISCMResource, to: ISCMResourceGroup): TPromise<void>;
+	readonly groups: ISequence<ISCMResourceGroup>;
+
+	// TODO@Joao: remove
+	readonly onDidChangeResources: Event<void>;
+
+	readonly rootUri?: URI;
+	readonly count?: number;
+	readonly commitTemplate?: string;
+	readonly onDidChangeCommitTemplate?: Event<string>;
+	readonly acceptInputCommand?: Command;
+	readonly statusBarCommands?: Command[];
+	readonly onDidChange: Event<void>;
+
 	getOriginalResource(uri: URI): TPromise<URI>;
+}
+
+export enum InputValidationType {
+	Error = 0,
+	Warning = 1,
+	Information = 2
+}
+
+export interface IInputValidation {
+	message: string;
+	type: InputValidationType;
+}
+
+export interface IInputValidator {
+	(value: string, cursorPosition: number): TPromise<IInputValidation | undefined>;
 }
 
 export interface ISCMInput {
 	value: string;
 	readonly onDidChange: Event<string>;
+
+	placeholder: string;
+	readonly onDidChangePlaceholder: Event<string>;
+
+	validateInput: IInputValidator;
+	readonly onDidChangeValidateInput: Event<void>;
+}
+
+export interface ISCMRepository extends IDisposable {
+	readonly onDidFocus: Event<void>;
+	readonly provider: ISCMProvider;
+	readonly input: ISCMInput;
+	focus(): void;
 }
 
 export interface ISCMService {
 
 	readonly _serviceBrand: any;
-	readonly onDidChangeProvider: Event<ISCMProvider>;
-	readonly providers: ISCMProvider[];
-	readonly input: ISCMInput;
-	activeProvider: ISCMProvider | undefined;
+	readonly onDidAddRepository: Event<ISCMRepository>;
+	readonly onDidRemoveRepository: Event<ISCMRepository>;
 
-	registerSCMProvider(provider: ISCMProvider): IDisposable;
+	readonly repositories: ISCMRepository[];
+
+	registerSCMProvider(provider: ISCMProvider): ISCMRepository;
 }

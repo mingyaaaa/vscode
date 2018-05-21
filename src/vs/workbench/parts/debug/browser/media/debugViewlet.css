@@ -16,7 +16,7 @@
 }
 
 .monaco-workbench .debug-action.start {
-	background: url('continue.svg') center center no-repeat;
+	background: url('start.svg') center center no-repeat;
 }
 
 .monaco-workbench .debug-action.toggle-repl {
@@ -57,7 +57,6 @@
 	margin-right: 0.3em;
 	height: 20px;
 	flex-shrink: 1;
-	border: 1px solid #dddddd;
 	margin-top: 7px;
 }
 
@@ -65,15 +64,12 @@
 	border-radius: 4px;
 }
 
-.vs-dark .monaco-workbench > .part > .title > .title-actions .start-debug-action-item,
-.hc-black .monaco-workbench > .part > .title > .title-actions .start-debug-action-item {
-	border-color: #3c3c3c;
-}
-
 .monaco-workbench > .part > .title > .title-actions .start-debug-action-item .icon {
 	height: 20px;
 	width: 20px;
-	background: url('continue.svg') center center no-repeat;
+	background: url('start.svg') no-repeat;
+	background-size: 16px 16px;
+	background-position: center center;
 	flex-shrink: 0;
 	transition: transform 50ms ease;
 	-webkit-transition: -webkit-transform 50ms ease;
@@ -81,34 +77,16 @@
 
 .vs-dark .monaco-workbench > .part > .title > .title-actions .start-debug-action-item .icon,
 .hc-black .monaco-workbench > .part > .title > .title-actions .start-debug-action-item .icon {
-	background: url('continue-inverse.svg') center center no-repeat;
+	background-image: url('start-inverse.svg');
 }
 
-.monaco-workbench > .part > .title > .title-actions .start-debug-action-item .configuration {
-	border-left: 1px solid #dddddd;
-}
-
-.vs-dark .monaco-workbench > .part > .title > .title-actions .start-debug-action-item .configuration,
-.hc-black .monaco-workbench > .part > .title > .title-actions .start-debug-action-item .configuration {
-	border-color: #3c3c3c;
-}
-
-.monaco-workbench .monaco-action-bar .start-debug-action-item .configuration .select-box {
-	background-color: #f3f3f3;
+.monaco-workbench .monaco-action-bar .start-debug-action-item .configuration .monaco-select-box {
 	border: none;
 	margin-top: 0px;
 	cursor: pointer;
 }
 
-.vs-dark .monaco-workbench .monaco-action-bar .start-debug-action-item .configuration .select-box {
-	background-color: #252526;
-}
-
-.hc-black .monaco-workbench .monaco-action-bar .start-debug-action-item .configuration .select-box {
-	background-color: #000;
-}
-
-.monaco-workbench .monaco-action-bar .start-debug-action-item .configuration.disabled .select-box {
+.monaco-workbench .monaco-action-bar .start-debug-action-item .configuration.disabled .monaco-select-box {
 	opacity: 0.7;
 	font-style: italic;
 	cursor: initial;
@@ -134,8 +112,9 @@
 }
 
 .debug-viewlet .monaco-tree .monaco-tree-row.selected .line-number,
+.debug-viewlet .monaco-list .monaco-list-row.selected .line-number,
 .debug-viewlet .monaco-tree .monaco-tree-row.selected .thread > .state > .label,
-.debug-viewlet .monaco-tree .monaco-tree-row.selected .process > .state > .label {
+.debug-viewlet .monaco-tree .monaco-tree-row.selected .session > .state > .label {
 	background-color: #ffffff;
 	color: #666;
 }
@@ -198,12 +177,12 @@
 }
 
 .debug-viewlet .debug-call-stack .thread,
-.debug-viewlet .debug-call-stack .process {
+.debug-viewlet .debug-call-stack .session {
 	display: flex;
 }
 
 .debug-viewlet .debug-call-stack .thread > .state,
-.debug-viewlet .debug-call-stack .process > .state {
+.debug-viewlet .debug-call-stack .session > .state {
 	flex: 1;
 	text-align: right;
 	overflow: hidden;
@@ -213,7 +192,7 @@
 }
 
 .debug-viewlet .debug-call-stack .thread > .state > .label,
-.debug-viewlet .debug-call-stack .process > .state > .label {
+.debug-viewlet .debug-call-stack .session > .state > .label {
 	background: rgba(136, 136, 136, 0.3);
 	border-radius: 2px;
 	font-size: 0.8em;
@@ -224,10 +203,21 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 	padding-right: 0.8em;
+	display: flex;
 }
 
 .debug-viewlet .debug-call-stack .stack-frame.label {
 	text-align: center;
+	font-style: italic;
+}
+
+.debug-viewlet .debug-call-stack .stack-frame .label {
+	flex: 1;
+	flex-shrink: 0;
+	min-width: fit-content;
+}
+
+.debug-viewlet .debug-call-stack .stack-frame.subtle {
 	font-style: italic;
 }
 
@@ -236,7 +226,10 @@
 }
 
 .debug-viewlet .debug-call-stack .stack-frame > .file {
-	float: right;
+	display: flex;
+	overflow: hidden;
+	flex-wrap: wrap;
+	justify-content: flex-end;
 }
 
 .debug-viewlet .debug-call-stack .stack-frame > .file > .line-number.unavailable {
@@ -245,6 +238,11 @@
 
 .debug-viewlet .debug-call-stack > .monaco-tree-row:not(.selected) .stack-frame > .file {
 	color: rgba(108, 108, 108, 0.8);
+}
+
+.debug-viewlet .debug-call-stack .stack-frame > .file > .file-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 .vs-dark .debug-viewlet .debug-call-stack > .monaco-tree-row:not(.selected) .stack-frame > .file {
@@ -350,12 +348,15 @@
 	animation-name: debugViewletValueChanged;
 }
 
-.vs-dark .debug-viewlet .monaco-inputbox > .wrapper > .input,
-.hc-black .debug-viewlet .monaco-inputbox > .wrapper > .input {
-	color: #CCC;
+/* Breakpoints */
+
+.debug-viewlet .debug-breakpoints .monaco-list-row .breakpoint {
+	padding-left: 2px;
 }
 
-/* Breakpoints */
+.debug-viewlet .debug-breakpoints .breakpoint.exception {
+	padding-left: 20px;
+}
 
 .debug-viewlet .debug-breakpoints .breakpoint {
 	display: flex;
@@ -368,6 +369,11 @@
 	flex-shrink: 0;
 }
 
+.debug-viewlet .debug-breakpoints .breakpoint > .icon {
+	width: 19px;
+	height: 19px;
+}
+
 .debug-viewlet .debug-breakpoints .breakpoint > .file-path {
 	opacity: 0.7;
 	font-size: 0.9em;
@@ -376,7 +382,6 @@
 	text-overflow: ellipsis;
 	overflow: hidden;
 }
-
 
 .debug-viewlet .debug-action.remove {
 	background: url('remove.svg') center center no-repeat;

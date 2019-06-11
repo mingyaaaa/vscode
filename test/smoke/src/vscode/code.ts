@@ -6,9 +6,12 @@
 import * as path from 'path';
 import * as cp from 'child_process';
 import * as os from 'os';
+import * as fs from 'fs';
+import * as mkdirp from 'mkdirp';
 import { tmpName } from 'tmp';
-import { IDriver, connect as connectDriver, IDisposable, IElement } from './driver';
+import { IDriver, connect as connectDriver, IDisposable, IElement, Thenable } from './driver';
 import { Logger } from '../logger';
+import { ncp } from 'ncp';
 
 const repoPath = path.join(__dirname, '../../../..');
 
@@ -64,7 +67,7 @@ async function connect(child: cp.ChildProcess, outPath: string, handlePath: stri
 	while (true) {
 		try {
 			const { client, driver } = await connectDriver(outPath, handlePath);
-			return new Code(child, client, driver, logger);
+			return new Code(client, driver, logger);
 		} catch (err) {
 			if (++errCount > 50) {
 				child.kill();
@@ -89,6 +92,8 @@ export interface SpawnOptions {
 	logger: Logger;
 	verbose?: boolean;
 	extraArgs?: string[];
+	log?: string;
+	remote?: boolean;
 }
 
 async function createDriverHandle(): Promise<string> {
@@ -119,6 +124,29 @@ export async function spawn(options: SpawnOptions): Promise<Code> {
 		'--driver', handle
 	];
 
+	const env = process.env;
+
+	if (options.remote) {
+		// Replace workspace path with URI
+		args.shift();
+		args.push(
+			`--${options.workspacePath.endsWith('.code-workspace') ? 'file' : 'folder'}-uri`,
+			`vscode-remote://test+test${options.workspacePath}`,
+		);
+		if (codePath) {
+			// running against a build: copy the test resolver extension
+			const testResolverExtPath = path.join(options.extensionsPath, 'vscode-test-resolver');
+			if (!fs.existsSync(testResolverExtPath)) {
+				const orig = path.join(repoPath, 'extensions', 'vscode-test-resolver');
+				await new Promise((c, e) => ncp(orig, testResolverExtPath, err => err ? e(err) : c()));
+			}
+		}
+		args.push('--enable-proposed-api=vscode.vscode-test-resolver');
+		const remoteDataDir = `${options.userDataDir}-server`;
+		mkdirp.sync(remoteDataDir);
+		env['TESTRESOLVER_DATA_FOLDER'] = remoteDataDir;
+	}
+
 	if (!codePath) {
 		args.unshift(repoPath);
 	}
@@ -127,11 +155,15 @@ export async function spawn(options: SpawnOptions): Promise<Code> {
 		args.push('--driver-verbose');
 	}
 
+	if (options.log) {
+		args.push('--log', options.log);
+	}
+
 	if (options.extraArgs) {
 		args.push(...options.extraArgs);
 	}
 
-	const spawnOptions: cp.SpawnOptions = {};
+	const spawnOptions: cp.SpawnOptions = { env };
 
 	const child = cp.spawn(electronPath, args, spawnOptions);
 
@@ -142,7 +174,7 @@ export async function spawn(options: SpawnOptions): Promise<Code> {
 }
 
 async function poll<T>(
-	fn: () => Promise<T>,
+	fn: () => Thenable<T>,
 	acceptFn: (result: T) => boolean,
 	timeoutMessage: string,
 	retryCount: number = 200,
@@ -183,13 +215,16 @@ export class Code {
 	private driver: IDriver;
 
 	constructor(
-		private process: cp.ChildProcess,
 		private client: IDisposable,
 		driver: IDriver,
 		readonly logger: Logger
 	) {
 		this.driver = new Proxy(driver, {
 			get(target, prop, receiver) {
+				if (typeof prop === 'symbol') {
+					throw new Error('Invalid usage');
+				}
+
 				if (typeof target[prop] !== 'function') {
 					return target[prop];
 				}
@@ -221,9 +256,13 @@ export class Code {
 		await this.driver.reloadWindow(windowId);
 	}
 
+	async exit(): Promise<void> {
+		await this.driver.exitApplication();
+	}
+
 	async waitForTextContent(selector: string, textContent?: string, accept?: (result: string) => boolean): Promise<string> {
 		const windowId = await this.getActiveWindowId();
-		accept = accept || (result => textContent !== void 0 ? textContent === result : !!result);
+		accept = accept || (result => textContent !== undefined ? textContent === result : !!result);
 
 		return await poll(
 			() => this.driver.getElements(windowId, selector).then(els => els.length > 0 ? Promise.resolve(els[0].textContent) : Promise.reject(new Error('Element not found for textContent'))),
@@ -240,11 +279,6 @@ export class Code {
 	async waitAndDoubleClick(selector: string): Promise<void> {
 		const windowId = await this.getActiveWindowId();
 		await poll(() => this.driver.doubleClick(windowId, selector), () => true, `double click '${selector}'`);
-	}
-
-	async waitAndMove(selector: string): Promise<void> {
-		const windowId = await this.getActiveWindowId();
-		await poll(() => this.driver.move(windowId, selector), () => true, `move '${selector}'`);
 	}
 
 	async waitForSetValue(selector: string, value: string): Promise<void> {
@@ -298,7 +332,6 @@ export class Code {
 
 	dispose(): void {
 		this.client.dispose();
-		this.process.kill();
 	}
 }
 

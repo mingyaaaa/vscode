@@ -3,37 +3,35 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-
-'use strict';
-
 import 'vs/css!./quickOutline';
-import * as nls from 'vs/nls';
+import { CancellationToken } from 'vs/base/common/cancellation';
 import { matchesFuzzy } from 'vs/base/common/filters';
+import { KeyCode, KeyMod } from 'vs/base/common/keyCodes';
 import * as strings from 'vs/base/common/strings';
-import { TPromise } from 'vs/base/common/winjs.base';
-import { IContext, IHighlight, QuickOpenEntryGroup, QuickOpenModel } from 'vs/base/parts/quickopen/browser/quickOpenModel';
-import { IAutoFocus, Mode } from 'vs/base/parts/quickopen/common/quickOpen';
+import { IHighlight, QuickOpenEntryGroup, QuickOpenModel } from 'vs/base/parts/quickopen/browser/quickOpenModel';
+import { IAutoFocus, Mode, IEntryRunContext } from 'vs/base/parts/quickopen/common/quickOpen';
+import { ICodeEditor } from 'vs/editor/browser/editorBrowser';
+import { ServicesAccessor, registerEditorAction } from 'vs/editor/browser/editorExtensions';
+import { IRange, Range } from 'vs/editor/common/core/range';
 import { ScrollType } from 'vs/editor/common/editorCommon';
 import { EditorContextKeys } from 'vs/editor/common/editorContextKeys';
-import { SymbolInformation, DocumentSymbolProviderRegistry, symbolKindToCssClass, IOutline, Location } from 'vs/editor/common/modes';
-import { BaseEditorQuickOpenAction, IDecorator } from './editorQuickOpen';
+import { DocumentSymbol, DocumentSymbolProviderRegistry, symbolKindToCssClass } from 'vs/editor/common/modes';
 import { getDocumentSymbols } from 'vs/editor/contrib/quickOpen/quickOpen';
-import { registerEditorAction, ServicesAccessor } from 'vs/editor/browser/editorExtensions';
-import { KeyCode, KeyMod } from 'vs/base/common/keyCodes';
-import { Range } from 'vs/editor/common/core/range';
-import { ICodeEditor } from 'vs/editor/browser/editorBrowser';
+import { BaseEditorQuickOpenAction, IDecorator } from 'vs/editor/standalone/browser/quickOpen/editorQuickOpen';
+import { KeybindingWeight } from 'vs/platform/keybinding/common/keybindingsRegistry';
+import { QuickOutlineNLS } from 'vs/editor/common/standaloneStrings';
 
 let SCOPE_PREFIX = ':';
 
 export class SymbolEntry extends QuickOpenEntryGroup {
-	private name: string;
-	private type: string;
-	private description: string;
-	private range: Range;
-	private editor: ICodeEditor;
-	private decorator: IDecorator;
+	private readonly name: string;
+	private readonly type: string;
+	private readonly description: string | undefined;
+	private readonly range: Range;
+	private readonly editor: ICodeEditor;
+	private readonly decorator: IDecorator;
 
-	constructor(name: string, type: string, description: string, range: Range, highlights: IHighlight[], editor: ICodeEditor, decorator: IDecorator) {
+	constructor(name: string, type: string, description: string | undefined, range: Range, highlights: IHighlight[], editor: ICodeEditor, decorator: IDecorator) {
 		super();
 
 		this.name = name;
@@ -50,14 +48,14 @@ export class SymbolEntry extends QuickOpenEntryGroup {
 	}
 
 	public getAriaLabel(): string {
-		return nls.localize('entryAriaLabel', "{0}, symbols", this.name);
+		return strings.format(QuickOutlineNLS.entryAriaLabel, this.name);
 	}
 
 	public getIcon(): string {
 		return this.type;
 	}
 
-	public getDescription(): string {
+	public getDescription(): string | undefined {
 		return this.description;
 	}
 
@@ -69,7 +67,7 @@ export class SymbolEntry extends QuickOpenEntryGroup {
 		return this.range;
 	}
 
-	public run(mode: Mode, context: IContext): boolean {
+	public run(mode: Mode, context: IEntryRunContext): boolean {
 		if (mode === Mode.OPEN) {
 			return this.runOpen(context);
 		}
@@ -77,7 +75,7 @@ export class SymbolEntry extends QuickOpenEntryGroup {
 		return this.runPreview();
 	}
 
-	private runOpen(context: IContext): boolean {
+	private runOpen(_context: IEntryRunContext): boolean {
 
 		// Apply selection and focus
 		let range = this.toSelection();
@@ -113,14 +111,15 @@ export class SymbolEntry extends QuickOpenEntryGroup {
 export class QuickOutlineAction extends BaseEditorQuickOpenAction {
 
 	constructor() {
-		super(nls.localize('quickOutlineActionInput', "Type the name of an identifier you wish to navigate to"), {
+		super(QuickOutlineNLS.quickOutlineActionInput, {
 			id: 'editor.action.quickOutline',
-			label: nls.localize('QuickOutlineAction.label', "Go to Symbol..."),
+			label: QuickOutlineNLS.quickOutlineActionLabel,
 			alias: 'Go to Symbol...',
 			precondition: EditorContextKeys.hasDocumentSymbolProvider,
 			kbOpts: {
 				kbExpr: EditorContextKeys.focus,
-				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KEY_O
+				primary: KeyMod.CtrlCmd | KeyMod.Shift | KeyCode.KEY_O,
+				weight: KeybindingWeight.EditorContrib
 			},
 			menuOpts: {
 				group: 'navigation',
@@ -129,25 +128,28 @@ export class QuickOutlineAction extends BaseEditorQuickOpenAction {
 		});
 	}
 
-	public run(accessor: ServicesAccessor, editor: ICodeEditor): TPromise<void> {
+	public run(accessor: ServicesAccessor, editor: ICodeEditor) {
+		if (!editor.hasModel()) {
+			return undefined;
+		}
 
-		let model = editor.getModel();
+		const model = editor.getModel();
 
 		if (!DocumentSymbolProviderRegistry.has(model)) {
-			return null;
+			return undefined;
 		}
 
 		// Resolve outline
-		return getDocumentSymbols(model).then((result: IOutline) => {
-			if (result.entries.length === 0) {
+		return getDocumentSymbols(model, true, CancellationToken.None).then((result: DocumentSymbol[]) => {
+			if (result.length === 0) {
 				return;
 			}
 
-			this._run(editor, result.entries);
+			this._run(editor, result);
 		});
 	}
 
-	private _run(editor: ICodeEditor, result: SymbolInformation[]): void {
+	private _run(editor: ICodeEditor, result: DocumentSymbol[]): void {
 		this._show(this.getController(editor), {
 			getModel: (value: string): QuickOpenModel => {
 				return new QuickOpenModel(this.toQuickOpenEntries(editor, result, value));
@@ -167,11 +169,11 @@ export class QuickOutlineAction extends BaseEditorQuickOpenAction {
 		});
 	}
 
-	private symbolEntry(name: string, type: string, description: string, location: Location, highlights: IHighlight[], editor: ICodeEditor, decorator: IDecorator): SymbolEntry {
-		return new SymbolEntry(name, type, description, Range.lift(location.range), highlights, editor, decorator);
+	private symbolEntry(name: string, type: string, description: string | undefined, range: IRange, highlights: IHighlight[], editor: ICodeEditor, decorator: IDecorator): SymbolEntry {
+		return new SymbolEntry(name, type, description, Range.lift(range), highlights, editor, decorator);
 	}
 
-	private toQuickOpenEntries(editor: ICodeEditor, flattened: SymbolInformation[], searchValue: string): SymbolEntry[] {
+	private toQuickOpenEntries(editor: ICodeEditor, flattened: DocumentSymbol[], searchValue: string): SymbolEntry[] {
 		const controller = this.getController(editor);
 
 		let results: SymbolEntry[] = [];
@@ -182,8 +184,7 @@ export class QuickOutlineAction extends BaseEditorQuickOpenAction {
 			normalizedSearchValue = normalizedSearchValue.substr(SCOPE_PREFIX.length);
 		}
 
-		for (let i = 0; i < flattened.length; i++) {
-			let element = flattened[i];
+		for (const element of flattened) {
 			let label = strings.trim(element.name);
 
 			// Check for meatch
@@ -191,13 +192,13 @@ export class QuickOutlineAction extends BaseEditorQuickOpenAction {
 			if (highlights) {
 
 				// Show parent scope as description
-				let description: string = null;
+				let description: string | undefined = undefined;
 				if (element.containerName) {
 					description = element.containerName;
 				}
 
 				// Add
-				results.push(this.symbolEntry(label, symbolKindToCssClass(element.kind), description, element.location, highlights, editor, controller));
+				results.push(this.symbolEntry(label, symbolKindToCssClass(element.kind), description, element.range, highlights, editor, controller));
 			}
 		}
 
@@ -212,8 +213,8 @@ export class QuickOutlineAction extends BaseEditorQuickOpenAction {
 
 		// Mark all type groups
 		if (results.length > 0 && searchValue.indexOf(SCOPE_PREFIX) === 0) {
-			let currentType: string = null;
-			let currentResult: SymbolEntry = null;
+			let currentType: string | null = null;
+			let currentResult: SymbolEntry | null = null;
 			let typeCounter = 0;
 
 			for (let i = 0; i < results.length; i++) {
@@ -224,7 +225,7 @@ export class QuickOutlineAction extends BaseEditorQuickOpenAction {
 
 					// Update previous result with count
 					if (currentResult) {
-						currentResult.setGroupLabel(this.typeToLabel(currentType, typeCounter));
+						currentResult.setGroupLabel(this.typeToLabel(currentType || '', typeCounter));
 					}
 
 					currentType = result.getType();
@@ -242,13 +243,13 @@ export class QuickOutlineAction extends BaseEditorQuickOpenAction {
 
 			// Update previous result with count
 			if (currentResult) {
-				currentResult.setGroupLabel(this.typeToLabel(currentType, typeCounter));
+				currentResult.setGroupLabel(this.typeToLabel(currentType || '', typeCounter));
 			}
 		}
 
 		// Mark first entry as outline
 		else if (results.length > 0) {
-			results[0].setGroupLabel(nls.localize('symbols', "symbols ({0})", results.length));
+			results[0].setGroupLabel(strings.format(QuickOutlineNLS._symbols_, results.length));
 		}
 
 		return results;
@@ -256,16 +257,16 @@ export class QuickOutlineAction extends BaseEditorQuickOpenAction {
 
 	private typeToLabel(type: string, count: number): string {
 		switch (type) {
-			case 'module': return nls.localize('modules', "modules ({0})", count);
-			case 'class': return nls.localize('class', "classes ({0})", count);
-			case 'interface': return nls.localize('interface', "interfaces ({0})", count);
-			case 'method': return nls.localize('method', "methods ({0})", count);
-			case 'function': return nls.localize('function', "functions ({0})", count);
-			case 'property': return nls.localize('property', "properties ({0})", count);
-			case 'variable': return nls.localize('variable', "variables ({0})", count);
-			case 'var': return nls.localize('variable2', "variables ({0})", count);
-			case 'constructor': return nls.localize('_constructor', "constructors ({0})", count);
-			case 'call': return nls.localize('call', "calls ({0})", count);
+			case 'module': return strings.format(QuickOutlineNLS._modules_, count);
+			case 'class': return strings.format(QuickOutlineNLS._class_, count);
+			case 'interface': return strings.format(QuickOutlineNLS._interface_, count);
+			case 'method': return strings.format(QuickOutlineNLS._method_, count);
+			case 'function': return strings.format(QuickOutlineNLS._function_, count);
+			case 'property': return strings.format(QuickOutlineNLS._property_, count);
+			case 'variable': return strings.format(QuickOutlineNLS._variable_, count);
+			case 'var': return strings.format(QuickOutlineNLS._variable2_, count);
+			case 'constructor': return strings.format(QuickOutlineNLS._constructor_, count);
+			case 'call': return strings.format(QuickOutlineNLS._call_, count);
 		}
 
 		return type;

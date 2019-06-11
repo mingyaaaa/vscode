@@ -14,6 +14,9 @@ export function setup() {
 				return;
 			}
 
+			await app.workbench.extensions.openExtensionsViewlet();
+			await app.workbench.extensions.installExtension('ms-ceintl.vscode-language-pack-de', 'German Language Pack for Visual Studio Code');
+
 			await app.restart({ extraArgs: ['--locale=DE'] });
 		});
 

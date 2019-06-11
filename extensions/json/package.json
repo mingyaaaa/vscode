@@ -4,11 +4,12 @@
   "description": "%description%",
   "version": "1.0.0",
   "publisher": "vscode",
+  "license": "MIT",
   "engines": {
     "vscode": "0.10.x"
   },
   "scripts": {
-    "update-grammar": "node ../../build/npm/update-grammar.js Microsoft/vscode-JSON.tmLanguage JSON.tmLanguage ./syntaxes/JSON.tmLanguage.json"
+    "update-grammar": "node ./build/update-grammars.js"
   },
   "contributes": {
     "languages": [
@@ -24,12 +25,13 @@
           ".jshintrc",
           ".jscsrc",
           ".eslintrc",
-          ".babelrc",
+          ".swcrc",
           ".webmanifest",
           ".js.map",
           ".css.map"
         ],
         "filenames": [
+          "composer.lock",
           ".watchmanconfig",
           ".ember-cli"
         ],
@@ -45,20 +47,9 @@
           "JSON with Comments"
         ],
         "extensions": [
-          ".code-workspace",
-          "language-configuration.json",
-          "icon-theme.json",
-          "color-theme.json",
-          ".code-snippets",
+          ".hintrc",
+          ".babelrc",
           ".jsonc"
-        ],
-        "filenames": [
-          "settings.json",
-          "launch.json",
-          "tasks.json",
-          "keybindings.json",
-          "tsconfig.json",
-          "jsconfig.json"
         ],
         "configuration": "./language-configuration.json"
       }
@@ -71,14 +62,14 @@
       },
       {
         "language": "jsonc",
-        "scopeName": "source.json",
-        "path": "./syntaxes/JSON.tmLanguage.json"
+        "scopeName": "source.json.comments",
+        "path": "./syntaxes/JSONC.tmLanguage.json"
       }
     ],
     "jsonValidation": [
       {
         "fileMatch": "*.schema.json",
-        "url": "http://json-schema.org/draft-04/schema#"
+        "url": "http://json-schema.org/draft-07/schema#"
       }
     ]
   }

@@ -3,94 +3,531 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// This is the place for API experiments and proposal.
+/**
+ * This is the place for API experiments and proposals.
+ * These API are NOT stable and subject to change. They are only available in the Insiders
+ * distribution and CANNOT be used in published extensions.
+ *
+ * To test these API in local environment:
+ * - Use Insiders release of VS Code.
+ * - Add `"enableProposedApi": true` to your package.json.
+ * - Copy this file to your project.
+ */
 
 declare module 'vscode' {
 
-	export namespace window {
-		export function sampleFunction(): Thenable<any>;
+	//#region Joh - ExecutionContext
+
+	export enum ExtensionExecutionContext {
+		Local = 1,
+		Remote = 2
 	}
 
-	//#region Joh: file system provider (OLD)
-
-	export enum DeprecatedFileChangeType {
-		Updated = 0,
-		Added = 1,
-		Deleted = 2
-	}
-	export interface DeprecatedFileChange {
-		type: DeprecatedFileChangeType;
-		resource: Uri;
-	}
-	export enum DeprecatedFileType {
-		File = 0,
-		Dir = 1,
-		Symlink = 2
-	}
-	export interface DeprecatedFileStat {
-		id: number | string;
-		mtime: number;
-		size: number;
-		type: DeprecatedFileType;
-	}
-	export interface DeprecatedFileSystemProvider {
-		readonly onDidChange?: Event<DeprecatedFileChange[]>;
-		utimes(resource: Uri, mtime: number, atime: number): Thenable<DeprecatedFileStat>;
-		stat(resource: Uri): Thenable<DeprecatedFileStat>;
-		read(resource: Uri, offset: number, length: number, progress: Progress<Uint8Array>): Thenable<number>;
-		write(resource: Uri, content: Uint8Array): Thenable<void>;
-		move(resource: Uri, target: Uri): Thenable<DeprecatedFileStat>;
-		mkdir(resource: Uri): Thenable<DeprecatedFileStat>;
-		readdir(resource: Uri): Thenable<[Uri, DeprecatedFileStat][]>;
-		rmdir(resource: Uri): Thenable<void>;
-		unlink(resource: Uri): Thenable<void>;
-	}
-	export namespace workspace {
-		export function registerDeprecatedFileSystemProvider(scheme: string, provider: DeprecatedFileSystemProvider): Disposable;
+	export interface ExtensionContext {
+		/**
+		 * Describes the context in which this extension is executed, e.g.
+		 * a Node.js-context on the same machine or on a remote machine
+		 */
+		executionContext: ExtensionExecutionContext;
 	}
 
 	//#endregion
 
-	//#region Joh: remote, search provider
 
-	export interface TextSearchQuery {
-		pattern: string;
-		isRegExp?: boolean;
-		isCaseSensitive?: boolean;
-		isWordMatch?: boolean;
+	//#region Joh - call hierarchy
+
+	export enum CallHierarchyDirection {
+		CallsFrom = 1,
+		CallsTo = 2,
 	}
 
-	export interface SearchOptions {
-		folder: Uri;
-		includes: string[]; // paths relative to folder
-		excludes: string[];
-		useIgnoreFiles?: boolean;
-		followSymlinks?: boolean;
-		previewOptions?: any; // total length? # of context lines? leading and trailing # of chars?
-	}
-
-	export interface TextSearchOptions extends SearchOptions {
-		maxFileSize?: number;
-		encoding?: string;
-	}
-
-	export interface FileSearchOptions extends SearchOptions { }
-
-	export interface TextSearchResult {
-		path: string;
+	export class CallHierarchyItem {
+		kind: SymbolKind;
+		name: string;
+		detail?: string;
+		uri: Uri;
 		range: Range;
+		selectionRange: Range;
 
-		// For now, preview must be a single line of text
-		preview: { text: string, match: Range };
+		constructor(kind: SymbolKind, name: string, detail: string, uri: Uri, range: Range, selectionRange: Range);
 	}
 
-	export interface SearchProvider {
-		provideFileSearchResults?(options: FileSearchOptions, progress: Progress<string>, token: CancellationToken): Thenable<void>;
-		provideTextSearchResults?(query: TextSearchQuery, options: TextSearchOptions, progress: Progress<TextSearchResult>, token: CancellationToken): Thenable<void>;
+	export interface CallHierarchyItemProvider {
+
+		/**
+		 * Given a document and position compute a call hierarchy item. This is justed as
+		 * anchor for call hierarchy and then `resolveCallHierarchyItem` is being called.
+		 */
+		provideCallHierarchyItem(
+			document: TextDocument,
+			postion: Position,
+			token: CancellationToken
+		): ProviderResult<CallHierarchyItem>;
+
+		/**
+		 * Resolve a call hierarchy item, e.g. compute all calls from or to a function.
+		 * The result is an array of item/location-tuples. The location in the returned tuples
+		 * is always relative to the "caller" with the caller either being the provided item or
+		 * the returned item.
+		 *
+		 * @param item A call hierarchy item previously returned from `provideCallHierarchyItem` or `resolveCallHierarchyItem`
+		 * @param direction Resolve calls from a function or calls to a function
+		 * @param token A cancellation token
+		 */
+		resolveCallHierarchyItem(
+			item: CallHierarchyItem,
+			direction: CallHierarchyDirection,
+			token: CancellationToken
+		): ProviderResult<[CallHierarchyItem, Location[]][]>;
+	}
+
+	export namespace languages {
+		export function registerCallHierarchyProvider(selector: DocumentSelector, provider: CallHierarchyItemProvider): Disposable;
+	}
+
+	//#endregion
+
+
+	//#region Alex - resolvers
+
+	export interface RemoteAuthorityResolverContext {
+		resolveAttempt: number;
+	}
+
+	export class ResolvedAuthority {
+		readonly host: string;
+		readonly port: number;
+
+		constructor(host: string, port: number);
+	}
+
+	export class RemoteAuthorityResolverError extends Error {
+		static NotAvailable(message?: string, handled?: boolean): RemoteAuthorityResolverError;
+		static TemporarilyNotAvailable(message?: string): RemoteAuthorityResolverError;
+
+		constructor(message?: string);
+	}
+
+	export interface RemoteAuthorityResolver {
+		resolve(authority: string, context: RemoteAuthorityResolverContext): ResolvedAuthority | Thenable<ResolvedAuthority>;
+	}
+
+	export interface ResourceLabelFormatter {
+		scheme: string;
+		authority?: string;
+		formatting: ResourceLabelFormatting;
+	}
+
+	export interface ResourceLabelFormatting {
+		label: string; // myLabel:/${path}
+		separator: '/' | '\\' | '';
+		tildify?: boolean;
+		normalizeDriveLetter?: boolean;
+		workspaceSuffix?: string;
+		authorityPrefix?: string;
 	}
 
 	export namespace workspace {
-		export function registerSearchProvider(scheme: string, provider: SearchProvider): Disposable;
+		export function registerRemoteAuthorityResolver(authorityPrefix: string, resolver: RemoteAuthorityResolver): Disposable;
+		export function registerResourceLabelFormatter(formatter: ResourceLabelFormatter): Disposable;
+	}
+
+	//#endregion
+
+
+	// #region Joh - code insets
+
+	export interface WebviewEditorInset {
+		readonly editor: TextEditor;
+		readonly range: Range;
+		readonly webview: Webview;
+		readonly onDidDispose: Event<void>;
+		dispose(): void;
+	}
+
+	export namespace window {
+		export function createWebviewTextEditorInset(editor: TextEditor, range: Range, options?: WebviewOptions): WebviewEditorInset;
+	}
+
+	//#endregion
+
+	//#region Joh - read/write in chunks
+
+	export interface FileSystemProvider {
+		open?(resource: Uri, options: { create: boolean }): number | Thenable<number>;
+		close?(fd: number): void | Thenable<void>;
+		read?(fd: number, pos: number, data: Uint8Array, offset: number, length: number): number | Thenable<number>;
+		write?(fd: number, pos: number, data: Uint8Array, offset: number, length: number): number | Thenable<number>;
+	}
+
+	//#endregion
+
+	//#region Rob: search provider
+
+	/**
+	 * The parameters of a query for text search.
+	 */
+	export interface TextSearchQuery {
+		/**
+		 * The text pattern to search for.
+		 */
+		pattern: string;
+
+		/**
+		 * Whether or not `pattern` should match multiple lines of text.
+		 */
+		isMultiline?: boolean;
+
+		/**
+		 * Whether or not `pattern` should be interpreted as a regular expression.
+		 */
+		isRegExp?: boolean;
+
+		/**
+		 * Whether or not the search should be case-sensitive.
+		 */
+		isCaseSensitive?: boolean;
+
+		/**
+		 * Whether or not to search for whole word matches only.
+		 */
+		isWordMatch?: boolean;
+	}
+
+	/**
+	 * A file glob pattern to match file paths against.
+	 * TODO@roblou - merge this with the GlobPattern docs/definition in vscode.d.ts.
+	 * @see [GlobPattern](#GlobPattern)
+	 */
+	export type GlobString = string;
+
+	/**
+	 * Options common to file and text search
+	 */
+	export interface SearchOptions {
+		/**
+		 * The root folder to search within.
+		 */
+		folder: Uri;
+
+		/**
+		 * Files that match an `includes` glob pattern should be included in the search.
+		 */
+		includes: GlobString[];
+
+		/**
+		 * Files that match an `excludes` glob pattern should be excluded from the search.
+		 */
+		excludes: GlobString[];
+
+		/**
+		 * Whether external files that exclude files, like .gitignore, should be respected.
+		 * See the vscode setting `"search.useIgnoreFiles"`.
+		 */
+		useIgnoreFiles: boolean;
+
+		/**
+		 * Whether symlinks should be followed while searching.
+		 * See the vscode setting `"search.followSymlinks"`.
+		 */
+		followSymlinks: boolean;
+
+		/**
+		 * Whether global files that exclude files, like .gitignore, should be respected.
+		 * See the vscode setting `"search.useGlobalIgnoreFiles"`.
+		 */
+		useGlobalIgnoreFiles: boolean;
+	}
+
+	/**
+	 * Options to specify the size of the result text preview.
+	 * These options don't affect the size of the match itself, just the amount of preview text.
+	 */
+	export interface TextSearchPreviewOptions {
+		/**
+		 * The maximum number of lines in the preview.
+		 * Only search providers that support multiline search will ever return more than one line in the match.
+		 */
+		matchLines: number;
+
+		/**
+		 * The maximum number of characters included per line.
+		 */
+		charsPerLine: number;
+	}
+
+	/**
+	 * Options that apply to text search.
+	 */
+	export interface TextSearchOptions extends SearchOptions {
+		/**
+		 * The maximum number of results to be returned.
+		 */
+		maxResults: number;
+
+		/**
+		 * Options to specify the size of the result text preview.
+		 */
+		previewOptions?: TextSearchPreviewOptions;
+
+		/**
+		 * Exclude files larger than `maxFileSize` in bytes.
+		 */
+		maxFileSize?: number;
+
+		/**
+		 * Interpret files using this encoding.
+		 * See the vscode setting `"files.encoding"`
+		 */
+		encoding?: string;
+
+		/**
+		 * Number of lines of context to include before each match.
+		 */
+		beforeContext?: number;
+
+		/**
+		 * Number of lines of context to include after each match.
+		 */
+		afterContext?: number;
+	}
+
+	/**
+	 * Information collected when text search is complete.
+	 */
+	export interface TextSearchComplete {
+		/**
+		 * Whether the search hit the limit on the maximum number of search results.
+		 * `maxResults` on [`TextSearchOptions`](#TextSearchOptions) specifies the max number of results.
+		 * - If exactly that number of matches exist, this should be false.
+		 * - If `maxResults` matches are returned and more exist, this should be true.
+		 * - If search hits an internal limit which is less than `maxResults`, this should be true.
+		 */
+		limitHit?: boolean;
+	}
+
+	/**
+	 * The parameters of a query for file search.
+	 */
+	export interface FileSearchQuery {
+		/**
+		 * The search pattern to match against file paths.
+		 */
+		pattern: string;
+	}
+
+	/**
+	 * Options that apply to file search.
+	 */
+	export interface FileSearchOptions extends SearchOptions {
+		/**
+		 * The maximum number of results to be returned.
+		 */
+		maxResults?: number;
+
+		/**
+		 * A CancellationToken that represents the session for this search query. If the provider chooses to, this object can be used as the key for a cache,
+		 * and searches with the same session object can search the same cache. When the token is cancelled, the session is complete and the cache can be cleared.
+		 */
+		session?: CancellationToken;
+	}
+
+	/**
+	 * A preview of the text result.
+	 */
+	export interface TextSearchMatchPreview {
+		/**
+		 * The matching lines of text, or a portion of the matching line that contains the match.
+		 */
+		text: string;
+
+		/**
+		 * The Range within `text` corresponding to the text of the match.
+		 * The number of matches must match the TextSearchMatch's range property.
+		 */
+		matches: Range | Range[];
+	}
+
+	/**
+	 * A match from a text search
+	 */
+	export interface TextSearchMatch {
+		/**
+		 * The uri for the matching document.
+		 */
+		uri: Uri;
+
+		/**
+		 * The range of the match within the document, or multiple ranges for multiple matches.
+		 */
+		ranges: Range | Range[];
+
+		/**
+		 * A preview of the text match.
+		 */
+		preview: TextSearchMatchPreview;
+	}
+
+	/**
+	 * A line of context surrounding a TextSearchMatch.
+	 */
+	export interface TextSearchContext {
+		/**
+		 * The uri for the matching document.
+		 */
+		uri: Uri;
+
+		/**
+		 * One line of text.
+		 * previewOptions.charsPerLine applies to this
+		 */
+		text: string;
+
+		/**
+		 * The line number of this line of context.
+		 */
+		lineNumber: number;
+	}
+
+	export type TextSearchResult = TextSearchMatch | TextSearchContext;
+
+	/**
+	 * A FileSearchProvider provides search results for files in the given folder that match a query string. It can be invoked by quickopen or other extensions.
+	 *
+	 * A FileSearchProvider is the more powerful of two ways to implement file search in VS Code. Use a FileSearchProvider if you wish to search within a folder for
+	 * all files that match the user's query.
+	 *
+	 * The FileSearchProvider will be invoked on every keypress in quickopen. When `workspace.findFiles` is called, it will be invoked with an empty query string,
+	 * and in that case, every file in the folder should be returned.
+	 */
+	export interface FileSearchProvider {
+		/**
+		 * Provide the set of files that match a certain file path pattern.
+		 * @param query The parameters for this query.
+		 * @param options A set of options to consider while searching files.
+		 * @param token A cancellation token.
+		 */
+		provideFileSearchResults(query: FileSearchQuery, options: FileSearchOptions, token: CancellationToken): ProviderResult<Uri[]>;
+	}
+
+	/**
+	 * A TextSearchProvider provides search results for text results inside files in the workspace.
+	 */
+	export interface TextSearchProvider {
+		/**
+		 * Provide results that match the given text pattern.
+		 * @param query The parameters for this query.
+		 * @param options A set of options to consider while searching.
+		 * @param progress A progress callback that must be invoked for all results.
+		 * @param token A cancellation token.
+		 */
+		provideTextSearchResults(query: TextSearchQuery, options: TextSearchOptions, progress: Progress<TextSearchResult>, token: CancellationToken): ProviderResult<TextSearchComplete>;
+	}
+
+	/**
+	 * Options that can be set on a findTextInFiles search.
+	 */
+	export interface FindTextInFilesOptions {
+		/**
+		 * A [glob pattern](#GlobPattern) that defines the files to search for. The glob pattern
+		 * will be matched against the file paths of files relative to their workspace. Use a [relative pattern](#RelativePattern)
+		 * to restrict the search results to a [workspace folder](#WorkspaceFolder).
+		 */
+		include?: GlobPattern;
+
+		/**
+		 * A [glob pattern](#GlobPattern) that defines files and folders to exclude. The glob pattern
+		 * will be matched against the file paths of resulting matches relative to their workspace. When `undefined` only default excludes will
+		 * apply, when `null` no excludes will apply.
+		 */
+		exclude?: GlobPattern | null;
+
+		/**
+		 * The maximum number of results to search for
+		 */
+		maxResults?: number;
+
+		/**
+		 * Whether external files that exclude files, like .gitignore, should be respected.
+		 * See the vscode setting `"search.useIgnoreFiles"`.
+		 */
+		useIgnoreFiles?: boolean;
+
+		/**
+		 * Whether global files that exclude files, like .gitignore, should be respected.
+		 * See the vscode setting `"search.useGlobalIgnoreFiles"`.
+		 */
+		useGlobalIgnoreFiles?: boolean;
+
+		/**
+		 * Whether symlinks should be followed while searching.
+		 * See the vscode setting `"search.followSymlinks"`.
+		 */
+		followSymlinks?: boolean;
+
+		/**
+		 * Interpret files using this encoding.
+		 * See the vscode setting `"files.encoding"`
+		 */
+		encoding?: string;
+
+		/**
+		 * Options to specify the size of the result text preview.
+		 */
+		previewOptions?: TextSearchPreviewOptions;
+
+		/**
+		 * Number of lines of context to include before each match.
+		 */
+		beforeContext?: number;
+
+		/**
+		 * Number of lines of context to include after each match.
+		 */
+		afterContext?: number;
+	}
+
+	export namespace workspace {
+		/**
+		 * Register a search provider.
+		 *
+		 * Only one provider can be registered per scheme.
+		 *
+		 * @param scheme The provider will be invoked for workspace folders that have this file scheme.
+		 * @param provider The provider.
+		 * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+		 */
+		export function registerFileSearchProvider(scheme: string, provider: FileSearchProvider): Disposable;
+
+		/**
+		 * Register a text search provider.
+		 *
+		 * Only one provider can be registered per scheme.
+		 *
+		 * @param scheme The provider will be invoked for workspace folders that have this file scheme.
+		 * @param provider The provider.
+		 * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+		 */
+		export function registerTextSearchProvider(scheme: string, provider: TextSearchProvider): Disposable;
+
+		/**
+		 * Search text in files across all [workspace folders](#workspace.workspaceFolders) in the workspace.
+		 * @param query The query parameters for the search - the search string, whether it's case-sensitive, or a regex, or matches whole words.
+		 * @param callback A callback, called for each result
+		 * @param token A token that can be used to signal cancellation to the underlying search engine.
+		 * @return A thenable that resolves when the search is complete.
+		 */
+		export function findTextInFiles(query: TextSearchQuery, callback: (result: TextSearchResult) => void, token?: CancellationToken): Thenable<TextSearchComplete>;
+
+		/**
+		 * Search text in files across all [workspace folders](#workspace.workspaceFolders) in the workspace.
+		 * @param query The query parameters for the search - the search string, whether it's case-sensitive, or a regex, or matches whole words.
+		 * @param options An optional set of query options. Include and exclude patterns, maxResults, etc.
+		 * @param callback A callback, called for each result
+		 * @param token A token that can be used to signal cancellation to the underlying search engine.
+		 * @return A thenable that resolves when the search is complete.
+		 */
+		export function findTextInFiles(query: TextSearchQuery, options: FindTextInFilesOptions, callback: (result: TextSearchResult) => void, token?: CancellationToken): Thenable<TextSearchComplete>;
 	}
 
 	//#endregion
@@ -132,12 +569,12 @@ declare module 'vscode' {
 
 	//todo@joh -> make class
 	export interface DecorationData {
-		priority?: number;
+		letter?: string;
 		title?: string;
-		bubble?: boolean;
-		abbreviation?: string;
 		color?: ThemeColor;
-		source?: string;
+		priority?: number;
+		bubble?: boolean;
+		source?: string; // hacky... we should remove it and use equality under the hood
 	}
 
 	export interface SourceControlResourceDecorations {
@@ -159,35 +596,12 @@ declare module 'vscode' {
 
 	//#region André: debug
 
-	/**
-	 * Represents a debug adapter executable and optional arguments passed to it.
-	 */
-	export class DebugAdapterExecutable {
-		/**
-		 * The command path of the debug adapter executable.
-		 * A command must be either an absolute path or the name of an executable looked up via the PATH environment variable.
-		 * The special value 'node' will be mapped to VS Code's built-in node runtime.
-		 */
-		readonly command: string;
-
-		/**
-		 * Optional arguments passed to the debug adapter executable.
-		 */
-		readonly args: string[];
-
-		/**
-		 * Create a new debug adapter specification.
-		 */
-		constructor(command: string, args?: string[]);
-	}
+	// deprecated
 
 	export interface DebugConfigurationProvider {
 		/**
-		 * This optional method is called just before a debug adapter is started to determine its excutable path and arguments.
-		 * Registering more than one debugAdapterExecutable for a type results in an error.
-		 * @param folder The workspace folder from which the configuration originates from or undefined for a folderless setup.
-		 * @param token A cancellation token.
-		 * @return a [debug adapter's executable and optional arguments](#DebugAdapterExecutable) or undefined.
+		 * Deprecated, use DebugAdapterDescriptorFactory.provideDebugAdapter instead.
+		 * @deprecated Use DebugAdapterDescriptorFactory.createDebugAdapterDescriptor instead
 		 */
 		debugAdapterExecutable?(folder: WorkspaceFolder | undefined, token?: CancellationToken): ProviderResult<DebugAdapterExecutable>;
 	}
@@ -209,39 +623,16 @@ declare module 'vscode' {
 		Off = 7
 	}
 
-	/**
-	 * A logger for writing to an extension's log file, and accessing its dedicated log directory.
-	 */
-	export interface Logger {
-		trace(message: string, ...args: any[]): void;
-		debug(message: string, ...args: any[]): void;
-		info(message: string, ...args: any[]): void;
-		warn(message: string, ...args: any[]): void;
-		error(message: string | Error, ...args: any[]): void;
-		critical(message: string | Error, ...args: any[]): void;
-	}
-
-	export interface ExtensionContext {
-		/**
-		 * This extension's logger
-		 */
-		logger: Logger;
-
-		/**
-		 * Path where an extension can write log files.
-		 *
-		 * Extensions must create this directory before writing to it. The parent directory will always exist.
-		 */
-		readonly logDirectory: string;
-	}
-
 	export namespace env {
 		/**
 		 * Current logging level.
-		 *
-		 * @readonly
 		 */
 		export const logLevel: LogLevel;
+
+		/**
+		 * An [event](#Event) that fires when the log level has changed.
+		 */
+		export const onDidChangeLogLevel: Event<LogLevel>;
 	}
 
 	//#endregion
@@ -296,295 +687,570 @@ declare module 'vscode' {
 
 	//#endregion
 
-	//#region Matt: WebView Serializer
+	//#region Joao: SCM selected provider
 
-	/**
-	 * Restore webview panels that have been persisted when vscode shuts down.
-	 */
-	interface WebviewPanelSerializer {
-		/**
-		 * Restore a webview panel from its seriailzed `state`.
-		 *
-		 * Called when a serialized webview first becomes visible.
-		 *
-		 * @param webviewPanel Webview panel to restore. The serializer should take ownership of this panel.
-		 * @param state Persisted state.
-		 *
-		 * @return Thanble indicating that the webview has been fully restored.
-		 */
-		deserializeWebviewPanel(webviewPanel: WebviewPanel, state: any): Thenable<void>;
-	}
+	export interface SourceControl {
 
-	namespace window {
 		/**
-		 * Registers a webview panel serializer.
-		 *
-		 * Extensions that support reviving should have an `"onView:viewType"` activation method and
-		 * make sure that [registerWebviewPanelSerializer](#registerWebviewPanelSerializer) is called during activation.
-		 *
-		 * Only a single serializer may be registered at a time for a given `viewType`.
-		 *
-		 * @param viewType Type of the webview panel that can be serialized.
-		 * @param reviver Webview serializer.
+		 * Whether the source control is selected.
 		 */
-		export function registerWebviewPanelSerializer(viewType: string, reviver: WebviewPanelSerializer): Disposable;
+		readonly selected: boolean;
+
+		/**
+		 * An event signaling when the selection state changes.
+		 */
+		readonly onDidChangeSelection: Event<boolean>;
 	}
 
 	//#endregion
 
-	//#region Tasks
+	//#region Joao: SCM Input Box
 
 	/**
-	 * An object representing an executed Task. It can be used
-	 * to terminate a task.
-	 *
-	 * This interface is not intended to be implemented.
+	 * Represents the input box in the Source Control viewlet.
 	 */
-	export interface TaskExecution {
-		/**
-		 * The task that got started.
-		 */
-		task: Task;
+	export interface SourceControlInputBox {
 
 		/**
-		 * Terminates the task execution.
-		 */
-		terminate(): void;
+			* Controls whether the input box is visible (default is `true`).
+			*/
+		visible: boolean;
 	}
 
-	/**
-	 * An event signaling the start of a task execution.
-	 *
-	 * This interface is not intended to be implemented.
-	 */
-	interface TaskStartEvent {
-		/**
-		 * The task item representing the task that got started.
-		 */
-		execution: TaskExecution;
-	}
+	//#endregion
 
+	//#region Comments
 	/**
-	 * An event signaling the end of an executed task.
-	 *
-	 * This interface is not intended to be implemented.
+	 * Comments provider related APIs are still in early stages, they may be changed significantly during our API experiments.
 	 */
-	interface TaskEndEvent {
+
+	interface CommentInfo {
 		/**
-		 * The task item representing the task that finished.
+		 * All of the comment threads associated with the document.
 		 */
-		execution: TaskExecution;
+		threads: CommentThread[];
+
+		/**
+		 * The ranges of the document which support commenting.
+		 */
+		commentingRanges?: Range[];
+
+		/**
+		 * If it's in draft mode or not
+		 */
+		inDraftMode?: boolean;
 	}
 
 	/**
-	 * An event signaling the start of a process execution
-	 * triggered through a task
+	 * A comment is displayed within the editor or the Comments Panel, depending on how it is provided.
 	 */
-	export interface TaskProcessStartEvent {
+	export interface Comment {
+		/**
+		 * The display name of the user who created the comment
+		 */
+		readonly userName: string;
 
 		/**
-		 * The task execution for which the process got started.
+		 * The icon path for the user who created the comment
 		 */
-		execution: TaskExecution;
+		readonly userIconPath?: Uri;
 
 		/**
-		 * The underlying process id.
+		 * The id of the comment
+		 *
+		 * @deprecated Use Id instead
 		 */
-		processId: number;
+		readonly commentId: string;
+
+		/**
+		 * @deprecated Use userIconPath instead. The avatar src of the user who created the comment
+		 */
+		gravatar?: string;
+
+		/**
+		 * Whether the current user has permission to edit the comment.
+		 *
+		 * This will be treated as false if the comment is provided by a `WorkspaceCommentProvider`, or
+		 * if it is provided by a `DocumentCommentProvider` and  no `editComment` method is given.
+		 *
+		 * DEPRECATED, use editCommand
+		 */
+		canEdit?: boolean;
+
+		/**
+		 * Whether the current user has permission to delete the comment.
+		 *
+		 * This will be treated as false if the comment is provided by a `WorkspaceCommentProvider`, or
+		 * if it is provided by a `DocumentCommentProvider` and  no `deleteComment` method is given.
+		 *
+		 * DEPRECATED, use deleteCommand
+		 */
+		canDelete?: boolean;
+
+		/**
+		 * @deprecated
+		 * The command to be executed if the comment is selected in the Comments Panel
+		 */
+		command?: Command;
+
+		/**
+		 * Deprecated
+		 */
+		isDraft?: boolean;
+
+		/**
+		 * The command to be executed when users try to delete the comment
+		 */
+		deleteCommand?: Command;
+
+		/**
+		 * Proposed Comment Reaction
+		 */
+		commentReactions?: CommentReaction[];
 	}
 
 	/**
-	 * An event signaling the end of a process execution
-	 * triggered through a task
+	 * Deprecated
 	 */
-	export interface TaskProcessEndEvent {
+	export interface CommentThreadChangedEvent {
+		/**
+		 * Added comment threads.
+		 */
+		readonly added: CommentThread[];
 
 		/**
-		 * The task execution for which the process got started.
+		 * Removed comment threads.
 		 */
-		execution: TaskExecution;
+		readonly removed: CommentThread[];
 
 		/**
-		 * The process's exit code.
+		 * Changed comment threads.
 		 */
-		exitCode: number;
-	}
-
-	export interface TaskFilter {
-		/**
-		 * The task version as used in the tasks.json file.
-		 * The string support the package.json semver notation.
-		 */
-		version?: string;
+		readonly changed: CommentThread[];
 
 		/**
-		 * The task type to return;
+		 * Changed draft mode
 		 */
-		type?: string;
-	}
-
-	export namespace workspace {
-
-		/**
-		 * Fetches all tasks available in the systems. This includes tasks
-		 * from `tasks.json` files as well as tasks from task providers
-		 * contributed through extensions.
-		 *
-		 * @param filter a filter to filter the return tasks.
-		 */
-		export function fetchTasks(filter?: TaskFilter): Thenable<Task[]>;
-
-		/**
-		 * Executes a task that is managed by VS Code. The returned
-		 * task execution can be used to terminate the task.
-		 *
-		 * @param task the task to execute
-		 */
-		export function executeTask(task: Task): Thenable<TaskExecution>;
-
-		/**
-		 * The currently active task executions or an empty array.
-		 *
-		 * @readonly
-		 */
-		export let taskExecutions: ReadonlyArray<TaskExecution>;
-
-		/**
-		 * Fires when a task starts.
-		 */
-		export const onDidStartTask: Event<TaskStartEvent>;
-
-		/**
-		 * Fires when a task ends.
-		 */
-		export const onDidEndTask: Event<TaskEndEvent>;
+		readonly inDraftMode: boolean;
 	}
 
 	/**
-	 * Namespace for tasks functionality.
+	 * Comment Reactions
+	 * Stay in proposed.
 	 */
-	export namespace tasks {
+	interface CommentReaction {
+		readonly hasReacted?: boolean;
+	}
+
+	/**
+	 * DEPRECATED
+	 */
+	interface DocumentCommentProvider {
+		/**
+		 * Provide the commenting ranges and comment threads for the given document. The comments are displayed within the editor.
+		 */
+		provideDocumentComments(document: TextDocument, token: CancellationToken): Promise<CommentInfo>;
 
 		/**
-		 * Register a task provider.
+		 * Called when a user adds a new comment thread in the document at the specified range, with body text.
+		 */
+		createNewCommentThread(document: TextDocument, range: Range, text: string, token: CancellationToken): Promise<CommentThread>;
+
+		/**
+		 * Called when a user replies to a new comment thread in the document at the specified range, with body text.
+		 */
+		replyToCommentThread(document: TextDocument, range: Range, commentThread: CommentThread, text: string, token: CancellationToken): Promise<CommentThread>;
+
+		/**
+		 * Called when a user edits the comment body to the be new text.
+		 */
+		editComment?(document: TextDocument, comment: Comment, text: string, token: CancellationToken): Promise<void>;
+
+		/**
+		 * Called when a user deletes the comment.
+		 */
+		deleteComment?(document: TextDocument, comment: Comment, token: CancellationToken): Promise<void>;
+
+		startDraft?(document: TextDocument, token: CancellationToken): Promise<void>;
+		deleteDraft?(document: TextDocument, token: CancellationToken): Promise<void>;
+		finishDraft?(document: TextDocument, token: CancellationToken): Promise<void>;
+
+		startDraftLabel?: string;
+		deleteDraftLabel?: string;
+		finishDraftLabel?: string;
+
+		addReaction?(document: TextDocument, comment: Comment, reaction: CommentReaction): Promise<void>;
+		deleteReaction?(document: TextDocument, comment: Comment, reaction: CommentReaction): Promise<void>;
+		reactionGroup?: CommentReaction[];
+
+		/**
+		 * Notify of updates to comment threads.
+		 */
+		onDidChangeCommentThreads: Event<CommentThreadChangedEvent>;
+	}
+
+	/**
+	 * DEPRECATED
+	 */
+	interface WorkspaceCommentProvider {
+		/**
+		 * Provide all comments for the workspace. Comments are shown within the comments panel. Selecting a comment
+		 * from the panel runs the comment's command.
+		 */
+		provideWorkspaceComments(token: CancellationToken): Promise<CommentThread[]>;
+
+		/**
+		 * Notify of updates to comment threads.
+		 */
+		onDidChangeCommentThreads: Event<CommentThreadChangedEvent>;
+	}
+
+	/**
+	 * Stay in proposed
+	 */
+	export interface CommentReactionProvider {
+		availableReactions: CommentReaction[];
+		toggleReaction?(document: TextDocument, comment: Comment, reaction: CommentReaction): Promise<void>;
+	}
+
+	export interface CommentThread {
+		/**
+		 * The uri of the document the thread has been created on.
+		 */
+		readonly resource: Uri;
+
+		/**
+		 * Optional additonal commands.
 		 *
-		 * @param type The task kind type this provider is registered for.
-		 * @param provider A task provider.
-		 * @return A [disposable](#Disposable) that unregisters this provider when being disposed.
+		 * `additionalCommands` are the secondary actions rendered on Comment Widget.
 		 */
-		export function registerTaskProvider(type: string, provider: TaskProvider): Disposable;
+		additionalCommands?: Command[];
 
 		/**
-		 * Fetches all tasks available in the systems. This includes tasks
-		 * from `tasks.json` files as well as tasks from task providers
-		 * contributed through extensions.
+		 * The command to be executed when users try to delete the comment thread. Currently, this is only called
+		 * when the user collapses a comment thread that has no comments in it.
+		 */
+		deleteCommand?: Command;
+	}
+
+
+	export interface CommentController {
+		/**
+		 * Optional reaction provider
+		 * Stay in proposed.
+		 */
+		reactionProvider?: CommentReactionProvider;
+	}
+
+	namespace workspace {
+		/**
+		 * DEPRECATED
+		 * Use vscode.comment.createCommentController instead.
+		 */
+		export function registerDocumentCommentProvider(provider: DocumentCommentProvider): Disposable;
+		/**
+		 * DEPRECATED
+		 * Use vscode.comment.createCommentController instead and we don't differentiate document comments and workspace comments anymore.
+		 */
+		export function registerWorkspaceCommentProvider(provider: WorkspaceCommentProvider): Disposable;
+	}
+
+	/**
+	 * A collection of [comments](#Comment) representing a conversation at a particular range in a document.
+	 */
+	export interface CommentThread {
+		/**
+		 * A unique identifier of the comment thread.
+		 */
+		readonly id: string;
+
+		/**
+		 * The uri of the document the thread has been created on.
+		 */
+		readonly uri: Uri;
+
+		/**
+		 * Optional accept input command
 		 *
-		 * @param filter a filter to filter the return tasks.
+		 * `acceptInputCommand` is the default action rendered on Comment Widget, which is always placed rightmost.
+		 * This command will be invoked when users the user accepts the value in the comment editor.
+		 * This command will disabled when the comment editor is empty.
 		 */
-		export function fetchTasks(filter?: TaskFilter): Thenable<Task[]>;
+		acceptInputCommand?: Command;
+	}
+
+	/**
+	 * A comment is displayed within the editor or the Comments Panel, depending on how it is provided.
+	 */
+	export interface Comment {
+		/**
+		 * The id of the comment
+		 */
+		id: string;
 
 		/**
-		 * Executes a task that is managed by VS Code. The returned
-		 * task execution can be used to terminate the task.
+		 * The command to be executed if the comment is selected in the Comments Panel
+		 */
+		selectCommand?: Command;
+
+		/**
+		 * The command to be executed when users try to save the edits to the comment
+		 */
+		editCommand?: Command;
+	}
+
+	/**
+	 * The comment input box in Comment Widget.
+	 */
+	export interface CommentInputBox {
+		/**
+		 * Setter and getter for the contents of the comment input box
+		 */
+		value: string;
+	}
+
+	/**
+	 * Commenting range provider for a [comment controller](#CommentController).
+	 */
+	export interface CommentingRangeProvider {
+		/**
+		 * Provide a list of ranges which allow new comment threads creation or null for a given document
+		 */
+		provideCommentingRanges(document: TextDocument, token: CancellationToken): ProviderResult<Range[]>;
+	}
+
+	export interface EmptyCommentThreadFactory {
+		/**
+		 * The method `createEmptyCommentThread` is called when users attempt to create new comment thread from the gutter or command palette.
+		 * Extensions still need to call `createCommentThread` inside this call when appropriate.
+		 */
+		createEmptyCommentThread(document: TextDocument, range: Range): ProviderResult<void>;
+	}
+
+	/**
+	 * A comment controller is able to provide [comments](#CommentThread) support to the editor and
+	 * provide users various ways to interact with comments.
+	 */
+	export interface CommentController {
+
+		/**
+		 * The active [comment input box](#CommentInputBox) or `undefined`. The active `inputBox` is the input box of
+		 * the comment thread widget that currently has focus. It's `undefined` when the focus is not in any CommentInputBox.
+		 */
+		readonly inputBox?: CommentInputBox;
+
+		/**
+		 * Create a [comment thread](#CommentThread). The comment thread will be displayed in visible text editors (if the resource matches)
+		 * and Comments Panel once created.
 		 *
-		 * @param task the task to execute
+		 * @param id An `id` for the comment thread.
+		 * @param resource The uri of the document the thread has been created on.
+		 * @param range The range the comment thread is located within the document.
+		 * @param comments The ordered comments of the thread.
 		 */
-		export function executeTask(task: Task): Thenable<TaskExecution>;
+		createCommentThread(id: string, resource: Uri, range: Range, comments: Comment[]): CommentThread;
 
 		/**
-		 * The currently active task executions or an empty array.
+		 * Optional new comment thread factory.
+		 */
+		emptyCommentThreadFactory?: EmptyCommentThreadFactory;
+
+		/**
+		 * Optional reaction provider
+		 */
+		reactionProvider?: CommentReactionProvider;
+
+		/**
+		 * Dispose this comment controller.
 		 *
-		 * @readonly
+		 * Once disposed, all [comment threads](#CommentThread) created by this comment controller will also be removed from the editor
+		 * and Comments Panel.
 		 */
-		export let taskExecutions: ReadonlyArray<TaskExecution>;
+		dispose(): void;
+	}
 
+	namespace comment {
 		/**
-		 * Fires when a task starts.
+		 * Creates a new [comment controller](#CommentController) instance.
+		 *
+		 * @param id An `id` for the comment controller.
+		 * @param label A human-readable string for the comment controller.
+		 * @return An instance of [comment controller](#CommentController).
 		 */
-		export const onDidStartTask: Event<TaskStartEvent>;
-
-		/**
-		 * Fires when a task ends.
-		 */
-		export const onDidEndTask: Event<TaskEndEvent>;
-
-		/**
-		 * Fires when the underlying process has been started.
-		 * This event will not fire for tasks that don't
-		 * execute an underlying process.
-		 */
-		export const onDidStartTaskProcess: Event<TaskProcessStartEvent>;
-
-		/**
-		 * Fires when the underlying process has ended.
-		 * This event will not fire for tasks that don't
-		 * execute an underlying process.
-		 */
-		export const onDidEndTaskProcess: Event<TaskProcessEndEvent>;
+		export function createCommentController(id: string, label: string): CommentController;
 	}
 
 	//#endregion
 
 	//#region Terminal
 
+	export interface TerminalOptions {
+		/**
+		 * When enabled the terminal will run the process as normal but not be surfaced to the user
+		 * until `Terminal.show` is called. The typical usage for this is when you need to run
+		 * something that may need interactivity but only want to tell the user about it when
+		 * interaction is needed. Note that the terminals will still be exposed to all extensions
+		 * as normal.
+		 */
+		runInBackground?: boolean;
+	}
+
+	/**
+	 * An [event](#Event) which fires when a [Terminal](#Terminal)'s dimensions change.
+	 */
+	export interface TerminalDimensionsChangeEvent {
+		/**
+		 * The [terminal](#Terminal) for which the dimensions have changed.
+		 */
+		readonly terminal: Terminal;
+		/**
+		 * The new value for the [terminal's dimensions](#Terminal.dimensions).
+		 */
+		readonly dimensions: TerminalDimensions;
+	}
+
+	namespace window {
+		/**
+		 * An event which fires when the [dimensions](#Terminal.dimensions) of the terminal change.
+		 */
+		export const onDidChangeTerminalDimensions: Event<TerminalDimensionsChangeEvent>;
+	}
+
 	export interface Terminal {
+		/**
+		 * The current dimensions of the terminal. This will be `undefined` immediately after the
+		 * terminal is created as the dimensions are not known until shortly after the terminal is
+		 * created.
+		 */
+		readonly dimensions: TerminalDimensions | undefined;
+
 		/**
 		 * Fires when the terminal's pty slave pseudo-device is written to. In other words, this
 		 * provides access to the raw data stream from the process running within the terminal,
-		 * including ANSI sequences.
+		 * including VT sequences.
 		 */
-		onData: Event<string>;
+		readonly onDidWriteData: Event<string>;
 	}
 
-	export namespace window {
+	/**
+	 * Represents the dimensions of a terminal.
+	 */
+	export interface TerminalDimensions {
 		/**
-		 * The currently active terminals or an empty array.
+		 * The number of columns in the terminal.
+		 */
+		readonly columns: number;
+
+		/**
+		 * The number of rows in the terminal.
+		 */
+		readonly rows: number;
+	}
+
+	/**
+	 * Represents a terminal without a process where all interaction and output in the terminal is
+	 * controlled by an extension. This is similar to an output window but has the same VT sequence
+	 * compatibility as the regular terminal.
+	 *
+	 * Note that an instance of [Terminal](#Terminal) will be created when a TerminalRenderer is
+	 * created with all its APIs available for use by extensions. When using the Terminal object
+	 * of a TerminalRenderer it acts just like normal only the extension that created the
+	 * TerminalRenderer essentially acts as a process. For example when an
+	 * [Terminal.onDidWriteData](#Terminal.onDidWriteData) listener is registered, that will fire
+	 * when [TerminalRenderer.write](#TerminalRenderer.write) is called. Similarly when
+	 * [Terminal.sendText](#Terminal.sendText) is triggered that will fire the
+	 * [TerminalRenderer.onDidAcceptInput](#TerminalRenderer.onDidAcceptInput) event.
+	 *
+	 * **Example:** Create a terminal renderer, show it and write hello world in red
+	 * ```typescript
+	 * const renderer = window.createTerminalRenderer('foo');
+	 * renderer.terminal.then(t => t.show());
+	 * renderer.write('\x1b[31mHello world\x1b[0m');
+	 * ```
+	 */
+	export interface TerminalRenderer {
+		/**
+		 * The name of the terminal, this will appear in the terminal selector.
+		 */
+		name: string;
+
+		/**
+		 * The dimensions of the terminal, the rows and columns of the terminal can only be set to
+		 * a value smaller than the maximum value, if this is undefined the terminal will auto fit
+		 * to the maximum value [maximumDimensions](TerminalRenderer.maximumDimensions).
 		 *
-		 * @readonly
+		 * **Example:** Override the dimensions of a TerminalRenderer to 20 columns and 10 rows
+		 * ```typescript
+		 * terminalRenderer.dimensions = {
+		 *   cols: 20,
+		 *   rows: 10
+		 * };
+		 * ```
 		 */
-		export let terminals: Terminal[];
+		dimensions: TerminalDimensions | undefined;
 
 		/**
-		 * An [event](#Event) which fires when a terminal has been created, either through the
-		 * [createTerminal](#window.createTerminal) API or commands.
+		 * The maximum dimensions of the terminal, this will be undefined immediately after a
+		 * terminal renderer is created and also until the terminal becomes visible in the UI.
+		 * Listen to [onDidChangeMaximumDimensions](TerminalRenderer.onDidChangeMaximumDimensions)
+		 * to get notified when this value changes.
 		 */
-		export const onDidOpenTerminal: Event<Terminal>;
-	}
+		readonly maximumDimensions: TerminalDimensions | undefined;
 
-	//#endregion
+		/**
+		 * The corresponding [Terminal](#Terminal) for this TerminalRenderer.
+		 */
+		readonly terminal: Terminal;
 
-	//#region URLs
+		/**
+		 * Write text to the terminal. Unlike [Terminal.sendText](#Terminal.sendText) which sends
+		 * text to the underlying _process_, this will write the text to the terminal itself.
+		 *
+		 * **Example:** Write red text to the terminal
+		 * ```typescript
+		 * terminalRenderer.write('\x1b[31mHello world\x1b[0m');
+		 * ```
+		 *
+		 * **Example:** Move the cursor to the 10th row and 20th column and write an asterisk
+		 * ```typescript
+		 * terminalRenderer.write('\x1b[10;20H*');
+		 * ```
+		 *
+		 * @param text The text to write.
+		 */
+		write(text: string): void;
 
-	export interface ProtocolHandler {
-		handleUri(uri: Uri): void;
+		/**
+		 * An event which fires on keystrokes in the terminal or when an extension calls
+		 * [Terminal.sendText](#Terminal.sendText). Keystrokes are converted into their
+		 * corresponding VT sequence representation.
+		 *
+		 * **Example:** Simulate interaction with the terminal from an outside extension or a
+		 * workbench command such as `workbench.action.terminal.runSelectedText`
+		 * ```typescript
+		 * const terminalRenderer = window.createTerminalRenderer('test');
+		 * terminalRenderer.onDidAcceptInput(data => {
+		 *   console.log(data); // 'Hello world'
+		 * });
+		 * terminalRenderer.terminal.sendText('Hello world');
+		 * ```
+		 */
+		readonly onDidAcceptInput: Event<string>;
+
+		/**
+		 * An event which fires when the [maximum dimensions](#TerminalRenderer.maximumDimensions) of
+		 * the terminal renderer change.
+		 */
+		readonly onDidChangeMaximumDimensions: Event<TerminalDimensions>;
 	}
 
 	export namespace window {
-
 		/**
-		 * Registers a protocol handler capable of handling system-wide URIs.
+		 * Create a [TerminalRenderer](#TerminalRenderer).
+		 *
+		 * @param name The name of the terminal renderer, this shows up in the terminal selector.
 		 */
-		export function registerProtocolHandler(handler: ProtocolHandler): Disposable;
-	}
-
-	//#endregion
-
-	//#region Joh: hierarchical document symbols, https://github.com/Microsoft/vscode/issues/34968
-
-	export class Hierarchy<T> {
-		parent: T;
-		children: Hierarchy<T>[];
-		constructor(element: T);
-	}
-
-	export class SymbolInformation2 extends SymbolInformation {
-		detail: string;
-		range: Range;
-		constructor(name: string, detail: string, kind: SymbolKind, range: Range, location: Location);
-	}
-
-	export interface DocumentSymbolProvider {
-		provideDocumentSymbols(document: TextDocument, token: CancellationToken): ProviderResult<SymbolInformation[] | Hierarchy<SymbolInformation>[]>;
+		export function createTerminalRenderer(name: string): TerminalRenderer;
 	}
 
 	//#endregion
@@ -597,47 +1263,177 @@ declare module 'vscode' {
 
 	//#endregion
 
-	//#region Multi-step input
+	//#region mjbvz,joh: https://github.com/Microsoft/vscode/issues/43768
+	export interface FileRenameEvent {
+		readonly oldUri: Uri;
+		readonly newUri: Uri;
+	}
 
-	export namespace window {
+	export interface FileWillRenameEvent {
+		readonly oldUri: Uri;
+		readonly newUri: Uri;
+		waitUntil(thenable: Thenable<WorkspaceEdit>): void;
+	}
+
+	export namespace workspace {
+		export const onWillRenameFile: Event<FileWillRenameEvent>;
+		export const onDidRenameFile: Event<FileRenameEvent>;
+	}
+	//#endregion
+
+	//#region Alex - OnEnter enhancement
+	export interface OnEnterRule {
+		/**
+		 * This rule will only execute if the text above the this line matches this regular expression.
+		 */
+		oneLineAboveText?: RegExp;
+	}
+	//#endregion
+
+	//#region Tree View
+
+	export interface TreeView<T> {
 
 		/**
-		 * Collect multiple inputs from the user. The provided handler will be called with a
-		 * [`QuickInput`](#QuickInput) that should be used to control the UI.
+		 * An optional human-readable message that will be rendered in the view.
+		 */
+		message?: string | MarkdownString;
+
+	}
+
+	/**
+	 * Label describing the [Tree item](#TreeItem)
+	 */
+	export interface TreeItemLabel {
+
+		/**
+		 * A human-readable string describing the [Tree item](#TreeItem).
+		 */
+		label: string;
+
+		/**
+		 * Ranges in the label to highlight. A range is defined as a tuple of two number where the
+		 * first is the inclusive start index and the second the exclusive end index
+		 */
+		highlights?: [number, number][];
+
+	}
+
+	export class TreeItem2 extends TreeItem {
+		/**
+		 * Label describing this item. When `falsy`, it is derived from [resourceUri](#TreeItem.resourceUri).
+		 */
+		label?: string | TreeItemLabel | /* for compilation */ any;
+
+		/**
+		 * @param label Label describing this item
+		 * @param collapsibleState [TreeItemCollapsibleState](#TreeItemCollapsibleState) of the tree item. Default is [TreeItemCollapsibleState.None](#TreeItemCollapsibleState.None)
+		 */
+		constructor(label: TreeItemLabel, collapsibleState?: TreeItemCollapsibleState);
+	}
+	//#endregion
+
+	/**
+	 * Class used to execute an extension callback as a task.
+	 */
+	export class CustomExecution {
+		/**
+		 * @param callback The callback that will be called when the extension callback task is executed.
+		 */
+		constructor(callback: (terminalRenderer: TerminalRenderer, cancellationToken: CancellationToken, thisArg?: any) => Thenable<number>);
+
+		/**
+		 * The callback used to execute the task.
+		 * @param terminalRenderer Used by the task to render output and receive input.
+		 * @param cancellationToken Cancellation used to signal a cancel request to the executing task.
+		 * @returns The callback should return '0' for success and a non-zero value for failure.
+		 */
+		callback: (terminalRenderer: TerminalRenderer, cancellationToken: CancellationToken, thisArg?: any) => Thenable<number>;
+	}
+
+	/**
+	 * A task to execute
+	 */
+	export class Task2 extends Task {
+		/**
+		 * Creates a new task.
 		 *
-		 * @param handler The callback that will collect the inputs.
+		 * @param definition The task definition as defined in the taskDefinitions extension point.
+		 * @param scope Specifies the task's scope. It is either a global or a workspace task or a task for a specific workspace folder.
+		 * @param name The task's name. Is presented in the user interface.
+		 * @param source The task's source (e.g. 'gulp', 'npm', ...). Is presented in the user interface.
+		 * @param execution The process or shell execution.
+		 * @param problemMatchers the names of problem matchers to use, like '$tsc'
+		 *  or '$eslint'. Problem matchers can be contributed by an extension using
+		 *  the `problemMatchers` extension point.
 		 */
-		export function multiStepInput<T>(handler: (input: QuickInput, token: CancellationToken) => Thenable<T>, token?: CancellationToken): Thenable<T>;
+		constructor(taskDefinition: TaskDefinition, scope: WorkspaceFolder | TaskScope.Global | TaskScope.Workspace, name: string, source: string, execution?: ProcessExecution | ShellExecution | CustomExecution, problemMatchers?: string | string[]);
+
+		/**
+		 * The task's execution engine
+		 */
+		execution2?: ProcessExecution | ShellExecution | CustomExecution;
 	}
 
-	/**
-	 * Controls the UI within a multi-step input session. The handler passed to [`window.multiStepInput`](#window.multiStepInput)
-	 * should use the instance of this interface passed to it to collect all inputs.
-	 */
-	export interface QuickInput {
-		showQuickPick: typeof window.showQuickPick;
-		showInputBox: typeof window.showInputBox;
+	//#region Tasks
+	export interface TaskPresentationOptions {
+		/**
+		 * Controls whether the task is executed in a specific terminal group using split panes.
+		 */
+		group?: string;
+	}
+	//#endregion
+
+	//#region Workspace URI Ben
+
+	export namespace workspace {
+
+		/**
+		 * The location of the workspace file, for example:
+		 *
+		 * `file:///Users/name/Development/myProject.code-workspace`
+		 *
+		 * or
+		 *
+		 * `untitled:1555503116870`
+		 *
+		 * for a workspace that is untitled and not yet saved.
+		 *
+		 * Depending on the workspace that is opened, the value will be:
+		 *  * `undefined` when no workspace or  a single folder is opened
+		 *  * the path of the workspace file as `Uri` otherwise. if the workspace
+		 * is untitled, the returned URI will use the `untitled:` scheme
+		 *
+		 * The location can e.g. be used with the `vscode.openFolder` command to
+		 * open the workspace again after it has been closed.
+		 *
+		 * **Example:**
+		 * ```typescript
+		 * vscode.commands.executeCommand('vscode.openFolder', uriOfWorkspace);
+		 * ```
+		 *
+		 * **Note:** it is not advised to use `workspace.workspaceFile` to write
+		 * configuration data into the file. You can use `workspace.getConfiguration().update()`
+		 * for that purpose which will work both when a single folder is opened as
+		 * well as an untitled or saved workspace.
+		 */
+		export const workspaceFile: Uri | undefined;
 	}
 
 	//#endregion
 
-	//#region mjbvz: Unused diagnostics
-	/**
-	 * Additional metadata about the type of diagnostic.
-	 */
-	export enum DiagnosticTag {
+	//#region DocumentLink tooltip mjbvz
+
+	interface DocumentLink {
 		/**
-		 * Unused or unnecessary code.
+		 * The tooltip text when you hover over this link.
+		 *
+		 * If a tooltip is provided, is will be displayed in a string that includes instructions on how to
+		 * trigger the link, such as `cmd + click to {0}`. The specific instructions vary depending on OS,
+		 * user settings, and localization.
 		 */
-		Unnecessary = 1,
+		tooltip?: string;
 	}
 
-	export interface Diagnostic {
-		/**
-		 * Additional metadata about the type of the diagnostic.
-		 */
-		customTags?: DiagnosticTag[];
-	}
-
-	//#endregion
+	// #endregion
 }

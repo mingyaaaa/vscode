@@ -4,6 +4,7 @@
 	"description": "%description%",
 	"version": "1.0.0",
 	"publisher": "vscode",
+	"license": "MIT",
 	"engines": {
 		"vscode": "*"
 	},
@@ -23,9 +24,6 @@
 					".eyaml",
 					".eyml",
 					".yaml"
-				],
-				"filenames": [
-					"yarn.lock"
 				],
 				"firstLine": "^#cloud-config",
 				"configuration": "./language-configuration.json"

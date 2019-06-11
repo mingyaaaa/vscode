@@ -3,27 +3,23 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-'use strict';
-
 import 'vs/css!./media/suggest';
 import * as nls from 'vs/nls';
 import { createMatches } from 'vs/base/common/filters';
 import * as strings from 'vs/base/common/strings';
-import { Event, Emitter, chain } from 'vs/base/common/event';
-import { TPromise } from 'vs/base/common/winjs.base';
-import { isPromiseCanceledError, onUnexpectedError } from 'vs/base/common/errors';
-import { IDisposable, dispose, toDisposable } from 'vs/base/common/lifecycle';
-import { addClass, append, $, hide, removeClass, show, toggleClass, getDomNodePagePosition, hasClass } from 'vs/base/browser/dom';
-import { HighlightedLabel } from 'vs/base/browser/ui/highlightedlabel/highlightedLabel';
-import { IDelegate, IListEvent, IRenderer } from 'vs/base/browser/ui/list/list';
+import { Event, Emitter } from 'vs/base/common/event';
+import { onUnexpectedError } from 'vs/base/common/errors';
+import { IDisposable, dispose, toDisposable, DisposableStore } from 'vs/base/common/lifecycle';
+import { addClass, append, $, hide, removeClass, show, toggleClass, getDomNodePagePosition, hasClass, addDisposableListener } from 'vs/base/browser/dom';
+import { IListVirtualDelegate, IListEvent, IListRenderer, IListMouseEvent } from 'vs/base/browser/ui/list/list';
 import { List } from 'vs/base/browser/ui/list/listWidget';
 import { DomScrollableElement } from 'vs/base/browser/ui/scrollbar/scrollableElement';
 import { IKeybindingService } from 'vs/platform/keybinding/common/keybinding';
 import { IContextKey, IContextKeyService } from 'vs/platform/contextkey/common/contextkey';
 import { IConfigurationChangedEvent } from 'vs/editor/common/config/editorOptions';
 import { ContentWidgetPositionPreference, ICodeEditor, IContentWidget, IContentWidgetPosition } from 'vs/editor/browser/editorBrowser';
-import { Context as SuggestContext } from './suggest';
-import { ICompletionItem, CompletionModel } from './completionModel';
+import { Context as SuggestContext, CompletionItem } from './suggest';
+import { CompletionModel } from './completionModel';
 import { alert } from 'vs/base/browser/ui/aria/aria';
 import { ITelemetryService } from 'vs/platform/telemetry/common/telemetry';
 import { attachListStyler } from 'vs/platform/theme/common/styler';
@@ -33,16 +29,22 @@ import { IStorageService, StorageScope } from 'vs/platform/storage/common/storag
 import { MarkdownRenderer } from 'vs/editor/contrib/markdown/markdownRenderer';
 import { IModeService } from 'vs/editor/common/services/modeService';
 import { IOpenerService } from 'vs/platform/opener/common/opener';
+import { TimeoutTimer, CancelablePromise, createCancelablePromise } from 'vs/base/common/async';
+import { CompletionItemKind, completionKindToCssClass } from 'vs/editor/common/modes';
+import { IconLabel, IIconLabelValueOptions } from 'vs/base/browser/ui/iconLabel/iconLabel';
+import { getIconClasses } from 'vs/editor/common/services/getIconClasses';
+import { IModelService } from 'vs/editor/common/services/modelService';
+import { URI } from 'vs/base/common/uri';
+import { IInstantiationService } from 'vs/platform/instantiation/common/instantiation';
+import { FileKind } from 'vs/platform/files/common/files';
 
-const sticky = false; // for development purposes
 const expandSuggestionDocsByDefault = false;
-const maxSuggestionsToShow = 12;
 
 interface ISuggestionTemplateData {
 	root: HTMLElement;
 	icon: HTMLElement;
 	colorspan: HTMLElement;
-	highlightedLabel: HighlightedLabel;
+	iconLabel: IconLabel;
 	typeLabel: HTMLElement;
 	readMore: HTMLElement;
 	disposables: IDisposable[];
@@ -59,27 +61,38 @@ export const editorSuggestWidgetHighlightForeground = registerColor('editorSugge
 
 
 const colorRegExp = /^(#([\da-f]{3}){1,2}|(rgb|hsl)a\(\s*(\d{1,3}%?\s*,\s*){3}(1|0?\.\d+)\)|(rgb|hsl)\(\s*\d{1,3}%?(\s*,\s*\d{1,3}%?){2}\s*\))$/i;
-function matchesColor(text: string) {
-	return text && text.match(colorRegExp) ? text : null;
+function extractColor(item: CompletionItem, out: string[]): boolean {
+	if (item.completion.label.match(colorRegExp)) {
+		out[0] = item.completion.label;
+		return true;
+	}
+	if (typeof item.completion.documentation === 'string' && item.completion.documentation.match(colorRegExp)) {
+		out[0] = item.completion.documentation;
+		return true;
+	}
+	return false;
 }
 
-function canExpandCompletionItem(item: ICompletionItem) {
+function canExpandCompletionItem(item: CompletionItem | null) {
 	if (!item) {
 		return false;
 	}
-	const suggestion = item.suggestion;
+	const suggestion = item.completion;
 	if (suggestion.documentation) {
 		return true;
 	}
 	return (suggestion.detail && suggestion.detail !== suggestion.label);
 }
 
-class Renderer implements IRenderer<ICompletionItem, ISuggestionTemplateData> {
+class Renderer implements IListRenderer<CompletionItem, ISuggestionTemplateData> {
 
 	constructor(
 		private widget: SuggestWidget,
 		private editor: ICodeEditor,
-		private triggerKeybindingLabel: string
+		private triggerKeybindingLabel: string,
+		@IModelService private readonly _modelService: IModelService,
+		@IModeService private readonly _modeService: IModeService,
+		@IThemeService private readonly _themeService: IThemeService,
 	) {
 
 	}
@@ -90,16 +103,21 @@ class Renderer implements IRenderer<ICompletionItem, ISuggestionTemplateData> {
 
 	renderTemplate(container: HTMLElement): ISuggestionTemplateData {
 		const data = <ISuggestionTemplateData>Object.create(null);
-		data.disposables = [];
+		const disposables = new DisposableStore();
+		data.disposables = [disposables];
+
 		data.root = container;
+		addClass(data.root, 'show-file-icons');
 
 		data.icon = append(container, $('.icon'));
 		data.colorspan = append(data.icon, $('span.colorspan'));
 
 		const text = append(container, $('.contents'));
 		const main = append(text, $('.main'));
-		data.highlightedLabel = new HighlightedLabel(main);
-		data.disposables.push(data.highlightedLabel);
+
+		data.iconLabel = new IconLabel(main, { supportHighlights: true });
+		disposables.add(data.iconLabel);
+
 		data.typeLabel = append(main, $('span.type-label'));
 
 		data.readMore = append(main, $('span.readMore'));
@@ -110,10 +128,12 @@ class Renderer implements IRenderer<ICompletionItem, ISuggestionTemplateData> {
 			const fontFamily = configuration.fontInfo.fontFamily;
 			const fontSize = configuration.contribInfo.suggestFontSize || configuration.fontInfo.fontSize;
 			const lineHeight = configuration.contribInfo.suggestLineHeight || configuration.fontInfo.lineHeight;
+			const fontWeight = configuration.fontInfo.fontWeight;
 			const fontSizePx = `${fontSize}px`;
 			const lineHeightPx = `${lineHeight}px`;
 
 			data.root.style.fontSize = fontSizePx;
+			data.root.style.fontWeight = fontWeight;
 			main.style.fontFamily = fontFamily;
 			main.style.lineHeight = lineHeightPx;
 			data.icon.style.height = lineHeightPx;
@@ -124,36 +144,56 @@ class Renderer implements IRenderer<ICompletionItem, ISuggestionTemplateData> {
 
 		configureFont();
 
-		chain<IConfigurationChangedEvent>(this.editor.onDidChangeConfiguration.bind(this.editor))
+		disposables.add(Event.chain<IConfigurationChangedEvent>(this.editor.onDidChangeConfiguration.bind(this.editor))
 			.filter(e => e.fontInfo || e.contribInfo)
-			.on(configureFont, null, data.disposables);
+			.on(configureFont, null));
 
 		return data;
 	}
 
-	renderElement(element: ICompletionItem, index: number, templateData: ISuggestionTemplateData): void {
+	renderElement(element: CompletionItem, _index: number, templateData: ISuggestionTemplateData): void {
 		const data = <ISuggestionTemplateData>templateData;
-		const suggestion = (<ICompletionItem>element).suggestion;
+		const suggestion = (<CompletionItem>element).completion;
 
-		if (canExpandCompletionItem(element)) {
-			data.root.setAttribute('aria-label', nls.localize('suggestionWithDetailsAriaLabel', "{0}, suggestion, has details", suggestion.label));
-		} else {
-			data.root.setAttribute('aria-label', nls.localize('suggestionAriaLabel', "{0}, suggestion", suggestion.label));
-		}
-
-		data.icon.className = 'icon ' + suggestion.type;
+		data.icon.className = 'icon ' + completionKindToCssClass(suggestion.kind);
 		data.colorspan.style.backgroundColor = '';
 
-		if (suggestion.type === 'color') {
-			let color = matchesColor(suggestion.label) || typeof suggestion.documentation === 'string' && matchesColor(suggestion.documentation);
-			if (color) {
-				data.icon.className = 'icon customcolor';
-				data.colorspan.style.backgroundColor = color;
-			}
+
+		const labelOptions: IIconLabelValueOptions = {
+			labelEscapeNewLines: true,
+			matches: createMatches(element.score)
+		};
+
+		let color: string[] = [];
+		if (suggestion.kind === CompletionItemKind.Color && extractColor(element, color)) {
+			// special logic for 'color' completion items
+			data.icon.className = 'icon customcolor';
+			data.colorspan.style.backgroundColor = color[0];
+
+		} else if (suggestion.kind === CompletionItemKind.File && this._themeService.getIconTheme().hasFileIcons) {
+			// special logic for 'file' completion items
+			data.icon.className = 'icon hide';
+			labelOptions.extraClasses = ([] as string[]).concat(
+				getIconClasses(this._modelService, this._modeService, URI.from({ scheme: 'fake', path: suggestion.label }), FileKind.FILE),
+				getIconClasses(this._modelService, this._modeService, URI.from({ scheme: 'fake', path: suggestion.detail }), FileKind.FILE)
+			);
+
+		} else if (suggestion.kind === CompletionItemKind.Folder && this._themeService.getIconTheme().hasFolderIcons) {
+			// special logic for 'folder' completion items
+			data.icon.className = 'icon hide';
+			labelOptions.extraClasses = ([] as string[]).concat(
+				getIconClasses(this._modelService, this._modeService, URI.from({ scheme: 'fake', path: suggestion.label }), FileKind.FOLDER),
+				getIconClasses(this._modelService, this._modeService, URI.from({ scheme: 'fake', path: suggestion.detail }), FileKind.FOLDER)
+			);
+		} else {
+			// normal icon
+			data.icon.className = 'icon hide';
+			labelOptions.extraClasses = [
+				`suggest-icon ${completionKindToCssClass(suggestion.kind)}`
+			];
 		}
 
-		data.highlightedLabel.set(suggestion.label, createMatches(element.matches));
-		// data.highlightedLabel.set(`${suggestion.label} <${element.score}=score(${element.word}, ${suggestion.filterText || suggestion.label})>`, createMatches(element.matches));
+		data.iconLabel.setLabel(suggestion.label, undefined, labelOptions);
 		data.typeLabel.textContent = (suggestion.detail || '').replace(/\n.*$/m, '');
 
 		if (canExpandCompletionItem(element)) {
@@ -172,7 +212,6 @@ class Renderer implements IRenderer<ICompletionItem, ISuggestionTemplateData> {
 			data.readMore.onmousedown = null;
 			data.readMore.onclick = null;
 		}
-
 	}
 
 	disposeTemplate(templateData: ISuggestionTemplateData): void {
@@ -198,17 +237,17 @@ class SuggestionDetails {
 	private header: HTMLElement;
 	private type: HTMLElement;
 	private docs: HTMLElement;
-	private ariaLabel: string;
+	private ariaLabel: string | null;
 	private disposables: IDisposable[];
 	private renderDisposeable: IDisposable;
 	private borderWidth: number = 1;
 
 	constructor(
 		container: HTMLElement,
-		private widget: SuggestWidget,
-		private editor: ICodeEditor,
-		private markdownRenderer: MarkdownRenderer,
-		private triggerKeybindingLabel: string
+		private readonly widget: SuggestWidget,
+		private readonly editor: ICodeEditor,
+		private readonly markdownRenderer: MarkdownRenderer,
+		private readonly triggerKeybindingLabel: string
 	) {
 		this.disposables = [];
 
@@ -231,7 +270,7 @@ class SuggestionDetails {
 
 		this.configureFont();
 
-		chain<IConfigurationChangedEvent>(this.editor.onDidChangeConfiguration.bind(this.editor))
+		Event.chain<IConfigurationChangedEvent>(this.editor.onDidChangeConfiguration.bind(this.editor))
 			.filter(e => e.fontInfo)
 			.on(this.configureFont, this, this.disposables);
 
@@ -242,7 +281,7 @@ class SuggestionDetails {
 		return this.el;
 	}
 
-	render(item: ICompletionItem): void {
+	render(item: CompletionItem): void {
 		this.renderDisposeable = dispose(this.renderDisposeable);
 
 		if (!item || !canExpandCompletionItem(item)) {
@@ -253,19 +292,19 @@ class SuggestionDetails {
 			return;
 		}
 		removeClass(this.el, 'no-docs');
-		if (typeof item.suggestion.documentation === 'string') {
+		if (typeof item.completion.documentation === 'string') {
 			removeClass(this.docs, 'markdown-docs');
-			this.docs.textContent = item.suggestion.documentation;
+			this.docs.textContent = item.completion.documentation;
 		} else {
 			addClass(this.docs, 'markdown-docs');
 			this.docs.innerHTML = '';
-			const renderedContents = this.markdownRenderer.render(item.suggestion.documentation);
+			const renderedContents = this.markdownRenderer.render(item.completion.documentation);
 			this.renderDisposeable = renderedContents;
 			this.docs.appendChild(renderedContents.element);
 		}
 
-		if (item.suggestion.detail) {
-			this.type.innerText = item.suggestion.detail;
+		if (item.completion.detail) {
+			this.type.innerText = item.completion.detail;
 			show(this.type);
 		} else {
 			this.type.innerText = '';
@@ -287,10 +326,13 @@ class SuggestionDetails {
 		this.body.scrollTop = 0;
 		this.scrollbar.scanDomNode();
 
-		this.ariaLabel = strings.format('{0}\n{1}\n{2}', item.suggestion.label || '', item.suggestion.detail || '', item.suggestion.documentation || '');
+		this.ariaLabel = strings.format(
+			'{0}{1}',
+			item.completion.detail || '',
+			item.completion.documentation ? (typeof item.completion.documentation === 'string' ? item.completion.documentation : item.completion.documentation.value) : '');
 	}
 
-	getAriaLabel(): string {
+	getAriaLabel() {
 		return this.ariaLabel;
 	}
 
@@ -327,10 +369,12 @@ class SuggestionDetails {
 		const fontFamily = configuration.fontInfo.fontFamily;
 		const fontSize = configuration.contribInfo.suggestFontSize || configuration.fontInfo.fontSize;
 		const lineHeight = configuration.contribInfo.suggestLineHeight || configuration.fontInfo.lineHeight;
+		const fontWeight = configuration.fontInfo.fontWeight;
 		const fontSizePx = `${fontSize}px`;
 		const lineHeightPx = `${lineHeight}px`;
 
 		this.el.style.fontSize = fontSizePx;
+		this.el.style.fontWeight = fontWeight;
 		this.type.style.fontFamily = fontFamily;
 		this.close.style.height = lineHeightPx;
 		this.close.style.width = lineHeightPx;
@@ -343,12 +387,12 @@ class SuggestionDetails {
 }
 
 export interface ISelectedSuggestion {
-	item: ICompletionItem;
+	item: CompletionItem;
 	index: number;
 	model: CompletionModel;
 }
 
-export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>, IDisposable {
+export class SuggestWidget implements IContentWidget, IListVirtualDelegate<CompletionItem>, IDisposable {
 
 	private static readonly ID: string = 'editor.widget.suggestWidget';
 
@@ -357,35 +401,34 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 
 	// Editor.IContentWidget.allowEditorOverflow
 	readonly allowEditorOverflow = true;
+	readonly suppressMouseDown = true;
 
-	private state: State;
+	private state: State | null;
 	private isAuto: boolean;
-	private loadingTimeout: number;
-	private currentSuggestionDetails: TPromise<void>;
-	private focusedItem: ICompletionItem;
+	private loadingTimeout: any;
+	private currentSuggestionDetails: CancelablePromise<void> | null;
+	private focusedItem: CompletionItem | null;
 	private ignoreFocusEvents = false;
-	private completionModel: CompletionModel;
+	private completionModel: CompletionModel | null;
 
 	private element: HTMLElement;
 	private messageElement: HTMLElement;
 	private listElement: HTMLElement;
 	private details: SuggestionDetails;
-	private list: List<ICompletionItem>;
+	private list: List<CompletionItem>;
 	private listHeight: number;
 
-	private suggestWidgetVisible: IContextKey<boolean>;
-	private suggestWidgetMultipleSuggestions: IContextKey<boolean>;
-	private suggestionSupportsAutoAccept: IContextKey<boolean>;
+	private readonly suggestWidgetVisible: IContextKey<boolean>;
+	private readonly suggestWidgetMultipleSuggestions: IContextKey<boolean>;
 
-	private editorBlurTimeout: TPromise<void>;
-	private showTimeout: TPromise<void>;
-	private toDispose: IDisposable[];
+	private readonly editorBlurTimeout = new TimeoutTimer();
+	private readonly showTimeout = new TimeoutTimer();
+	private readonly toDispose: IDisposable[] = [];
 
 	private onDidSelectEmitter = new Emitter<ISelectedSuggestion>();
 	private onDidFocusEmitter = new Emitter<ISelectedSuggestion>();
 	private onDidHideEmitter = new Emitter<this>();
 	private onDidShowEmitter = new Emitter<this>();
-
 
 	readonly onDidSelect: Event<ISelectedSuggestion> = this.onDidSelectEmitter.event;
 	readonly onDidFocus: Event<ISelectedSuggestion> = this.onDidFocusEmitter.event;
@@ -394,22 +437,25 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 
 	private readonly maxWidgetWidth = 660;
 	private readonly listWidth = 330;
-	private storageService: IStorageService;
+	private readonly storageService: IStorageService;
 	private detailsFocusBorderColor: string;
 	private detailsBorderColor: string;
 
-	private storageServiceAvailable: boolean = true;
-	private expandSuggestionDocs: boolean = false;
+	private firstFocusInCurrentList: boolean = false;
+
+	private preferDocPositionTop: boolean = false;
+	private docsPositionPreviousWidgetY: number | null;
 
 	constructor(
-		private editor: ICodeEditor,
-		@ITelemetryService private telemetryService: ITelemetryService,
+		private readonly editor: ICodeEditor,
+		@ITelemetryService private readonly telemetryService: ITelemetryService,
 		@IContextKeyService contextKeyService: IContextKeyService,
 		@IThemeService themeService: IThemeService,
 		@IStorageService storageService: IStorageService,
 		@IKeybindingService keybindingService: IKeybindingService,
 		@IModeService modeService: IModeService,
-		@IOpenerService openerService: IOpenerService
+		@IOpenerService openerService: IOpenerService,
+		@IInstantiationService instantiationService: IInstantiationService,
 	) {
 		const kb = keybindingService.lookupKeybinding('editor.action.triggerSuggest');
 		const triggerKeybindingLabel = !kb ? '' : ` (${kb.getLabel()})`;
@@ -419,47 +465,44 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 		this.focusedItem = null;
 		this.storageService = storageService;
 
-		if (this.expandDocsSettingFromStorage() === undefined) {
-			this.storageService.store('expandSuggestionDocs', expandSuggestionDocsByDefault, StorageScope.GLOBAL);
-			if (this.expandDocsSettingFromStorage() === undefined) {
-				this.storageServiceAvailable = false;
-			}
-		}
-
 		this.element = $('.editor-widget.suggest-widget');
-		if (!this.editor.getConfiguration().contribInfo.iconsInSuggestions) {
-			addClass(this.element, 'no-icons');
-		}
+		this.toDispose.push(addDisposableListener(this.element, 'click', e => {
+			if (e.target === this.element) {
+				this.hideWidget();
+			}
+		}));
 
 		this.messageElement = append(this.element, $('.message'));
 		this.listElement = append(this.element, $('.tree'));
 		this.details = new SuggestionDetails(this.element, this, this.editor, markdownRenderer, triggerKeybindingLabel);
 
-		let renderer = new Renderer(this, this.editor, triggerKeybindingLabel);
+		const applyIconStyle = () => toggleClass(this.element, 'no-icons', !this.editor.getConfiguration().contribInfo.suggest.showIcons);
+		applyIconStyle();
+
+		let renderer = instantiationService.createInstance(Renderer, this, this.editor, triggerKeybindingLabel);
 
 		this.list = new List(this.listElement, this, [renderer], {
 			useShadows: false,
-			selectOnMouseDown: true,
-			focusOnMouseDown: false,
-			openController: { shouldOpen: () => false }
+			openController: { shouldOpen: () => false },
+			mouseSupport: false
 		});
 
-		this.toDispose = [
+		this.toDispose.push(
 			attachListStyler(this.list, themeService, {
 				listInactiveFocusBackground: editorSuggestWidgetSelectedBackground,
 				listInactiveFocusOutline: activeContrastBorder
 			}),
 			themeService.onThemeChange(t => this.onThemeChange(t)),
-			editor.onDidBlurEditorText(() => this.onEditorBlur()),
 			editor.onDidLayoutChange(() => this.onEditorLayoutChange()),
+			this.list.onMouseDown(e => this.onListMouseDown(e)),
 			this.list.onSelectionChange(e => this.onListSelection(e)),
 			this.list.onFocusChange(e => this.onListFocus(e)),
-			this.editor.onDidChangeCursorSelection(() => this.onCursorSelectionChanged())
-		];
+			this.editor.onDidChangeCursorSelection(() => this.onCursorSelectionChanged()),
+			this.editor.onDidChangeConfiguration(e => e.contribInfo && applyIconStyle())
+		);
 
 		this.suggestWidgetVisible = SuggestContext.Visible.bindTo(contextKeyService);
 		this.suggestWidgetMultipleSuggestions = SuggestContext.MultipleSuggestions.bindTo(contextKeyService);
-		this.suggestionSupportsAutoAccept = SuggestContext.AcceptOnKey.bindTo(contextKeyService);
 
 		this.editor.addContentWidget(this);
 		this.setState(State.Hidden);
@@ -475,79 +518,84 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 		this.editor.layoutContentWidget(this);
 	}
 
-	private onEditorBlur(): void {
-		if (sticky) {
-			return;
-		}
-
-		this.editorBlurTimeout = TPromise.timeout(150).then(() => {
-			if (!this.editor.hasTextFocus()) {
-				this.setState(State.Hidden);
-			}
-		});
-	}
-
 	private onEditorLayoutChange(): void {
 		if ((this.state === State.Open || this.state === State.Details) && this.expandDocsSettingFromStorage()) {
 			this.expandSideOrBelow();
 		}
 	}
 
-	private onListSelection(e: IListEvent<ICompletionItem>): void {
+	private onListMouseDown(e: IListMouseEvent<CompletionItem>): void {
+		if (typeof e.element === 'undefined' || typeof e.index === 'undefined') {
+			return;
+		}
+
+		// prevent stealing browser focus from the editor
+		e.browserEvent.preventDefault();
+		e.browserEvent.stopPropagation();
+
+		this.select(e.element, e.index);
+	}
+
+	private onListSelection(e: IListEvent<CompletionItem>): void {
 		if (!e.elements.length) {
 			return;
 		}
 
-		const item = e.elements[0];
-		const index = e.indexes[0];
-		item.resolve().then(() => {
-			this.onDidSelectEmitter.fire({ item, index, model: this.completionModel });
-			alert(nls.localize('suggestionAriaAccepted', "{0}, accepted", item.suggestion.label));
-			this.editor.focus();
-		});
+		this.select(e.elements[0], e.indexes[0]);
 	}
 
-	private _getSuggestionAriaAlertLabel(item: ICompletionItem): string {
-		if (canExpandCompletionItem(item)) {
-			return nls.localize('ariaCurrentSuggestionWithDetails', "{0}, suggestion, has details", item.suggestion.label);
+	private select(item: CompletionItem, index: number): void {
+		const completionModel = this.completionModel;
+
+		if (!completionModel) {
+			return;
+		}
+
+		this.onDidSelectEmitter.fire({ item, index, model: completionModel });
+		this.editor.focus();
+	}
+
+	private _getSuggestionAriaAlertLabel(item: CompletionItem): string {
+		if (this.expandDocsSettingFromStorage()) {
+			return nls.localize('ariaCurrenttSuggestionReadDetails', "Item {0}, docs: {1}", item.completion.label, this.details.getAriaLabel());
 		} else {
-			return nls.localize('ariaCurrentSuggestion', "{0}, suggestion", item.suggestion.label);
+			return item.completion.label;
 		}
 	}
 
-	private _lastAriaAlertLabel: string;
-	private _ariaAlert(newAriaAlertLabel: string): void {
+	private _lastAriaAlertLabel: string | null;
+	private _ariaAlert(newAriaAlertLabel: string | null): void {
 		if (this._lastAriaAlertLabel === newAriaAlertLabel) {
 			return;
 		}
 		this._lastAriaAlertLabel = newAriaAlertLabel;
 		if (this._lastAriaAlertLabel) {
-			alert(this._lastAriaAlertLabel);
+			alert(this._lastAriaAlertLabel, true);
 		}
 	}
 
 	private onThemeChange(theme: ITheme) {
-		let backgroundColor = theme.getColor(editorSuggestWidgetBackground);
+		const backgroundColor = theme.getColor(editorSuggestWidgetBackground);
 		if (backgroundColor) {
 			this.listElement.style.backgroundColor = backgroundColor.toString();
 			this.details.element.style.backgroundColor = backgroundColor.toString();
 			this.messageElement.style.backgroundColor = backgroundColor.toString();
 		}
-		let borderColor = theme.getColor(editorSuggestWidgetBorder);
+		const borderColor = theme.getColor(editorSuggestWidgetBorder);
 		if (borderColor) {
 			this.listElement.style.borderColor = borderColor.toString();
 			this.details.element.style.borderColor = borderColor.toString();
 			this.messageElement.style.borderColor = borderColor.toString();
 			this.detailsBorderColor = borderColor.toString();
 		}
-		let focusBorderColor = theme.getColor(focusBorder);
+		const focusBorderColor = theme.getColor(focusBorder);
 		if (focusBorderColor) {
 			this.detailsFocusBorderColor = focusBorderColor.toString();
 		}
 		this.details.setBorderWidth(theme.type === 'hc' ? 2 : 1);
 	}
 
-	private onListFocus(e: IListEvent<ICompletionItem>): void {
+	private onListFocus(e: IListEvent<CompletionItem>): void {
 		if (this.ignoreFocusEvents) {
 			return;
 		}
@@ -563,28 +611,33 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 			return;
 		}
 
-		const item = e.elements[0];
-		this._ariaAlert(this._getSuggestionAriaAlertLabel(item));
-
-		if (item === this.focusedItem) {
+		if (!this.completionModel) {
 			return;
 		}
 
-		if (this.currentSuggestionDetails) {
-			this.currentSuggestionDetails.cancel();
-			this.currentSuggestionDetails = null;
-		}
-
+		const item = e.elements[0];
 		const index = e.indexes[0];
 
-		this.suggestionSupportsAutoAccept.set(!item.suggestion.noAutoAccept);
+		this.firstFocusInCurrentList = !this.focusedItem;
+		if (item !== this.focusedItem) {
 
-		this.focusedItem = item;
 
-		this.list.reveal(index);
+			if (this.currentSuggestionDetails) {
+				this.currentSuggestionDetails.cancel();
+				this.currentSuggestionDetails = null;
+			}
 
-		this.currentSuggestionDetails = item.resolve()
-			.then(() => {
+			this.focusedItem = item;
+
+			this.list.reveal(index);
+
+			this.currentSuggestionDetails = createCancelablePromise(token => item.resolve(token));
+
+			this.currentSuggestionDetails.then(() => {
+				if (this.list.length < index) {
+					return;
+				}
+
 				// item can have extra information, so re-render
 				this.ignoreFocusEvents = true;
 				this.list.splice(index, 1, [item]);
@@ -596,9 +649,14 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 				} else {
 					removeClass(this.element, 'docs-side');
 				}
-			})
-			.then(null, err => !isPromiseCanceledError(err) && onUnexpectedError(err))
-			.then(() => this.currentSuggestionDetails = null);
+
+				this._ariaAlert(this._getSuggestionAriaAlertLabel(item));
+			}).catch(onUnexpectedError).then(() => {
+				if (this.focusedItem === item) {
+					this.currentSuggestionDetails = null;
+				}
+			});
+		}
 
 		// emit an event
 		this.onDidFocusEmitter.fire({ item, index, model: this.completionModel });
@@ -622,6 +680,7 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 				if (stateChanged) {
 					this.list.splice(0, this.list.length);
 				}
+				this.focusedItem = null;
 				break;
 			case State.Loading:
 				this.messageElement.textContent = SuggestWidget.LOADING_MESSAGE;
@@ -629,6 +688,7 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 				show(this.messageElement);
 				removeClass(this.element, 'docs-side');
 				this.show();
+				this.focusedItem = null;
 				break;
 			case State.Empty:
 				this.messageElement.textContent = SuggestWidget.NO_SUGGESTIONS_MESSAGE;
@@ -636,9 +696,10 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 				show(this.messageElement);
 				removeClass(this.element, 'docs-side');
 				this.show();
+				this.focusedItem = null;
 				break;
 			case State.Open:
-				hide(this.messageElement, this.details.element);
+				hide(this.messageElement);
 				show(this.listElement);
 				this.show();
 				break;
@@ -656,7 +717,7 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 		}
 	}
 
-	showTriggered(auto: boolean) {
+	showTriggered(auto: boolean, delay: number) {
 		if (this.state !== State.Hidden) {
 			return;
 		}
@@ -667,17 +728,27 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 			this.loadingTimeout = setTimeout(() => {
 				this.loadingTimeout = null;
 				this.setState(State.Loading);
-			}, 50);
+			}, delay);
 		}
 	}
 
 	showSuggestions(completionModel: CompletionModel, selectionIndex: number, isFrozen: boolean, isAuto: boolean): void {
+		this.preferDocPositionTop = false;
+		this.docsPositionPreviousWidgetY = null;
+
 		if (this.loadingTimeout) {
 			clearTimeout(this.loadingTimeout);
 			this.loadingTimeout = null;
 		}
 
-		this.completionModel = completionModel;
+		if (this.currentSuggestionDetails) {
+			this.currentSuggestionDetails.cancel();
+			this.currentSuggestionDetails = null;
+		}
+
+		if (this.completionModel !== completionModel) {
+			this.completionModel = completionModel;
+		}
 
 		if (isFrozen && this.state !== State.Empty && this.state !== State.Hidden) {
 			this.setState(State.Frozen);
@@ -699,18 +770,21 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 			this.completionModel = null;
 
 		} else {
-			const { stats } = this.completionModel;
-			stats['wasAutomaticallyTriggered'] = !!isAuto;
-			/* __GDPR__
-				"suggestWidget" : {
-					"wasAutomaticallyTriggered" : { "classification": "SystemMetaData", "purpose": "FeatureInsight", "isMeasurement": true },
-					"${include}": [
-						"${ICompletionStats}",
-						"${EditorTelemetryData}"
-					]
-				}
-			*/
-			this.telemetryService.publicLog('suggestWidget', { ...stats, ...this.editor.getTelemetryData() });
+
+			if (this.state !== State.Open) {
+				const { stats } = this.completionModel;
+				stats['wasAutomaticallyTriggered'] = !!isAuto;
+				/* __GDPR__
+					"suggestWidget" : {
+						"wasAutomaticallyTriggered" : { "classification": "SystemMetaData", "purpose": "FeatureInsight", "isMeasurement": true },
+						"${include}": [
+							"${ICompletionStats}",
+							"${EditorTelemetryData}"
+						]
+					}
+				*/
+				this.telemetryService.publicLog('suggestWidget', { ...stats, ...this.editor.getTelemetryData() });
+			}
 
 			this.focusedItem = null;
 			this.list.splice(0, this.list.length, this.completionModel.items);
@@ -721,7 +795,7 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 				this.setState(State.Open);
 			}
 
-			this.list.reveal(selectionIndex, selectionIndex);
+			this.list.reveal(selectionIndex, 0);
 			this.list.setFocus([selectionIndex]);
 
 			// Reset focus border
@@ -815,10 +889,12 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 		}
 	}
 
-	getFocusedItem(): ISelectedSuggestion {
+	getFocusedItem(): ISelectedSuggestion | undefined {
 		if (this.state !== State.Hidden
 			&& this.state !== State.Empty
-			&& this.state !== State.Loading) {
+			&& this.state !== State.Loading
+			&& this.completionModel
+		) {
 
 			return {
 				item: this.list.getFocusedElements()[0],
@@ -871,12 +947,13 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 			*/
 			this.telemetryService.publicLog('suggestWidget:collapseDetails', this.editor.getTelemetryData());
 		} else {
-			if (this.state !== State.Open && this.state !== State.Details) {
+			if (this.state !== State.Open && this.state !== State.Details && this.state !== State.Frozen) {
 				return;
 			}
 
 			this.updateExpandDocsSetting(true);
 			this.showDetails();
+			this._ariaAlert(this.details.getAriaLabel());
 			/* __GDPR__
 				"suggestWidget:expandDetails" : {
 					"${include}": [
@@ -886,7 +963,6 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 			*/
 			this.telemetryService.publicLog('suggestWidget:expandDetails', this.editor.getTelemetryData());
 		}
-
 	}
 
 	showDetails(): void {
@@ -905,8 +981,6 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 		this.adjustDocsPosition();
 
 		this.editor.focus();
-
-		this._ariaAlert(this.details.getAriaLabel());
 	}
 
 	private show(): void {
@@ -918,10 +992,10 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 
 		this.suggestWidgetVisible.set(true);
 
-		this.showTimeout = TPromise.timeout(100).then(() => {
+		this.showTimeout.cancelAndSet(() => {
 			addClass(this.element, 'visible');
 			this.onDidShowEmitter.fire(this);
-		});
+		}, 100);
 	}
 
 	private hide(): void {
@@ -936,14 +1010,19 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 		this.onDidHideEmitter.fire(this);
 	}
 
-	getPosition(): IContentWidgetPosition {
+	getPosition(): IContentWidgetPosition | null {
 		if (this.state === State.Hidden) {
 			return null;
 		}
 
+		let preference = [ContentWidgetPositionPreference.BELOW, ContentWidgetPositionPreference.ABOVE];
+		if (this.preferDocPositionTop) {
+			preference = [ContentWidgetPositionPreference.ABOVE];
+		}
+
 		return {
 			position: this.editor.getPosition(),
-			preference: [ContentWidgetPositionPreference.BELOW, ContentWidgetPositionPreference.ABOVE]
+			preference: preference
 		};
 	}
 
@@ -962,7 +1041,8 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 			height = this.unfocusedHeight;
 		} else {
 			const suggestionCount = this.list.contentHeight / this.unfocusedHeight;
-			height = Math.min(suggestionCount, maxSuggestionsToShow) * this.unfocusedHeight;
+			const { maxVisibleSuggestions } = this.editor.getConfiguration().contribInfo.suggest;
+			height = Math.min(suggestionCount, maxVisibleSuggestions) * this.unfocusedHeight;
 		}
 
 		this.element.style.lineHeight = `${this.unfocusedHeight}px`;
@@ -971,7 +1051,14 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 		return height;
 	}
 
+	/**
+	 * Adds the propert classes, margins when positioning the docs to the side
+	 */
 	private adjustDocsPosition() {
+		if (!this.editor.hasModel()) {
+			return;
+		}
+
 		const lineHeight = this.editor.getConfiguration().fontInfo.lineHeight;
 		const cursorCoords = this.editor.getScrolledVisiblePosition(this.editor.getPosition());
 		const editorCoords = getDomNodePagePosition(this.editor.getDomNode());
@@ -980,6 +1067,17 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 		const widgetCoords = getDomNodePagePosition(this.element);
 		const widgetX = widgetCoords.left;
 		const widgetY = widgetCoords.top;
+
+		// Fixes #27649
+		// Check if the Y changed to the top of the cursor and keep the widget flagged to prefer top
+		if (this.docsPositionPreviousWidgetY &&
+			this.docsPositionPreviousWidgetY < widgetY &&
+			!this.preferDocPositionTop) {
+			this.preferDocPositionTop = true;
+			this.adjustDocsPosition();
+			return;
+		}
+		this.docsPositionPreviousWidgetY = widgetY;
 
 		if (widgetX < cursorX - this.listWidth) {
 			// Widget is too far to the left of cursor, swap list and docs
@@ -1001,12 +1099,21 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 		}
 	}
 
+	/**
+	 * Adds the proper classes for positioning the docs to the side or below
+	 */
 	private expandSideOrBelow() {
-		let matches = this.element.style.maxWidth.match(/(\d+)px/);
+		if (!canExpandCompletionItem(this.focusedItem) && this.firstFocusInCurrentList) {
+			removeClass(this.element, 'docs-side');
+			removeClass(this.element, 'docs-below');
+			return;
+		}
+
+		let matches = this.element.style.maxWidth!.match(/(\d+)px/);
 		if (!matches || Number(matches[1]) < this.maxWidgetWidth) {
 			addClass(this.element, 'docs-below');
 			removeClass(this.element, 'docs-side');
-		} else {
+		} else if (canExpandCompletionItem(this.focusedItem)) {
 			addClass(this.element, 'docs-side');
 			removeClass(this.element, 'docs-below');
 		}
@@ -1015,7 +1122,7 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 	// Heights
 
 	private get maxWidgetHeight(): number {
-		return this.unfocusedHeight * maxSuggestionsToShow;
+		return this.unfocusedHeight * this.editor.getConfiguration().contribInfo.suggest.maxVisibleSuggestions;
 	}
 
 	private get unfocusedHeight(): number {
@@ -1025,68 +1132,50 @@ export class SuggestWidget implements IContentWidget, IDelegate<ICompletionItem>
 
 	// IDelegate
 
-	getHeight(element: ICompletionItem): number {
+	getHeight(element: CompletionItem): number {
 		return this.unfocusedHeight;
 	}
 
-	getTemplateId(element: ICompletionItem): string {
+	getTemplateId(element: CompletionItem): string {
 		return 'suggestion';
 	}
 
-	// Monaco Editor does not have a storage service
 	private expandDocsSettingFromStorage(): boolean {
-		if (this.storageServiceAvailable) {
-			return this.storageService.getBoolean('expandSuggestionDocs', StorageScope.GLOBAL);
-		} else {
-			return this.expandSuggestionDocs;
-		}
+		return this.storageService.getBoolean('expandSuggestionDocs', StorageScope.GLOBAL, expandSuggestionDocsByDefault);
 	}
 
-	// Monaco Editor does not have a storage service
 	private updateExpandDocsSetting(value: boolean) {
-		if (this.storageServiceAvailable) {
-			this.storageService.store('expandSuggestionDocs', value, StorageScope.GLOBAL);
-		} else {
-			this.expandSuggestionDocs = value;
-		}
+		this.storageService.store('expandSuggestionDocs', value, StorageScope.GLOBAL);
 	}
 
 	dispose(): void {
 		this.state = null;
-		this.suggestionSupportsAutoAccept = null;
 		this.currentSuggestionDetails = null;
 		this.focusedItem = null;
-		this.element = null;
-		this.messageElement = null;
-		this.listElement = null;
+		this.element = null!; // StrictNullOverride: nulling out ok in dispose
+		this.messageElement = null!; // StrictNullOverride: nulling out ok in dispose
+		this.listElement = null!; // StrictNullOverride: nulling out ok in dispose
 		this.details.dispose();
-		this.details = null;
+		this.details = null!; // StrictNullOverride: nulling out ok in dispose
 		this.list.dispose();
-		this.list = null;
-		this.toDispose = dispose(this.toDispose);
+		this.list = null!; // StrictNullOverride: nulling out ok in dispose
+		dispose(this.toDispose);
 		if (this.loadingTimeout) {
 			clearTimeout(this.loadingTimeout);
 			this.loadingTimeout = null;
 		}
 
-		if (this.editorBlurTimeout) {
-			this.editorBlurTimeout.cancel();
-			this.editorBlurTimeout = null;
-		}
-
-		if (this.showTimeout) {
-			this.showTimeout.cancel();
-			this.showTimeout = null;
-		}
+		this.editorBlurTimeout.dispose();
+		this.showTimeout.dispose();
 	}
 }
 
 registerThemingParticipant((theme, collector) => {
-	let matchHighlight = theme.getColor(editorSuggestWidgetHighlightForeground);
+	const matchHighlight = theme.getColor(editorSuggestWidgetHighlightForeground);
 	if (matchHighlight) {
 		collector.addRule(`.monaco-editor .suggest-widget .monaco-list .monaco-list-row .monaco-highlighted-label .highlight { color: ${matchHighlight}; }`);
 	}
-	let foreground = theme.getColor(editorSuggestWidgetForeground);
+	const foreground = theme.getColor(editorSuggestWidgetForeground);
 	if (foreground) {
 		collector.addRule(`.monaco-editor .suggest-widget { color: ${foreground}; }`);
 	}
@@ -1096,7 +1185,7 @@ registerThemingParticipant((theme, collector) => {
 		collector.addRule(`.monaco-editor .suggest-widget a { color: ${link}; }`);
 	}
 
-	let codeBackground = theme.getColor(textCodeBlockBackground);
+	const codeBackground = theme.getColor(textCodeBlockBackground);
 	if (codeBackground) {
 		collector.addRule(`.monaco-editor .suggest-widget code { background-color: ${codeBackground}; }`);
 	}

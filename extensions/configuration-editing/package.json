@@ -4,6 +4,7 @@
   "description": "%description%",
   "version": "1.0.0",
   "publisher": "vscode",
+  "license": "MIT",
   "engines": {
     "vscode": "^1.0.0"
   },
@@ -17,10 +18,29 @@
     "watch": "gulp watch-extension:configuration-editing"
   },
   "dependencies": {
-    "jsonc-parser": "^1.0.0",
-    "vscode-nls": "^3.2.1"
+    "jsonc-parser": "2.0.2",
+    "vscode-nls": "^4.0.0"
   },
   "contributes": {
+    "languages": [
+      {
+        "id": "jsonc",
+        "extensions": [
+          ".code-workspace",
+          "language-configuration.json",
+          "icon-theme.json",
+          "color-theme.json",
+          ".code-snippets"
+        ],
+        "filenames": [
+          "settings.json",
+          "launch.json",
+          "tasks.json",
+          "keybindings.json",
+          "extensions.json"
+        ]
+      }
+    ],
     "jsonValidation": [
       {
         "fileMatch": "vscode://defaultsettings/keybindings.json",
@@ -37,6 +57,10 @@
       {
         "fileMatch": "%APP_SETTINGS_HOME%/settings.json",
         "url": "vscode://schemas/settings/user"
+      },
+      {
+        "fileMatch": "%MACHINE_SETTINGS_HOME%/settings.json",
+        "url": "vscode://schemas/settings/machine"
       },
       {
         "fileMatch": "%APP_WORKSPACES_HOME%/*/workspace.json",
@@ -73,10 +97,18 @@
       {
         "fileMatch": "/.vscode/extensions.json",
         "url": "vscode://schemas/extensions"
+      },
+      {
+        "fileMatch": "/.devcontainer/devcontainer.json",
+        "url": "./schemas/devContainer.schema.json"
+      },
+      {
+        "fileMatch": "/.devcontainer.json",
+        "url": "./schemas/devContainer.schema.json"
       }
     ]
   },
   "devDependencies": {
-    "@types/node": "7.0.4"
+    "@types/node": "^10.14.8"
   }
 }

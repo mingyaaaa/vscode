@@ -36,6 +36,17 @@
           ".tsx"
         ],
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "jsonc",
+        "filenames": [
+          "tsconfig.json",
+          "jsconfig.json"
+        ],
+        "filenamePatterns": [
+          "tsconfig.*.json",
+          "tsconfig-*.json"
+        ]
       }
     ],
     "grammars": [
@@ -66,6 +77,16 @@
           "meta.import string.quoted": "other",
           "variable.other.jsdoc": "other"
         }
+      },
+      {
+        "scopeName": "documentation.injection",
+        "path": "./syntaxes/jsdoc.injection.tmLanguage.json",
+        "injectTo": [
+          "source.ts",
+          "source.tsx",
+          "source.js",
+          "source.js.jsx"
+        ]
       }
     ],
     "snippets": [
@@ -89,6 +110,14 @@
       },
       {
         "fileMatch": "tsconfig.*.json",
+        "url": "https://schemastore.azurewebsites.net/schemas/json/tsconfig.json"
+      },
+      {
+        "fileMatch": "tsconfig-*.json",
+        "url": "./schemas/tsconfig.schema.json"
+      },
+      {
+        "fileMatch": "tsconfig-*.json",
         "url": "https://schemastore.azurewebsites.net/schemas/json/tsconfig.json"
       },
       {

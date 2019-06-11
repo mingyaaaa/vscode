@@ -10,19 +10,26 @@
 table {
 	width: 100%;
 	max-width: 100%;
-	margin-bottom: 1rem;
 	background-color: transparent;
 	border-collapse: collapse;
 }
 th {
 	vertical-align: bottom;
-	border-bottom: 2px solid #e9ecef;
-	padding: .75rem;
+	border-bottom: 1px solid;
+	padding: 5px;
 	text-align: inherit;
 }
 td {
-	padding: .25rem;
+	padding: 5px;
 	vertical-align: top;
+}
+
+tr td:first-child {
+	width: 30%;
+}
+
+label {
+	user-select: none;
 }
 
 .block-settingsSearchResults-details {
@@ -65,6 +72,7 @@ textarea {
 	width: auto;
 	padding: 4px 10px;
 	align-self: flex-end;
+	margin-bottom: 10px;
 }
 
 select {
@@ -75,7 +83,6 @@ select {
 	line-height: 1.5;
 	color: #495057;
 	background-color: #fff;
-	border-radius: 0.25rem;
 	border: none;
 }
 
@@ -83,19 +90,35 @@ select {
 	box-sizing: border-box;
 }
 
-textarea {
-	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "HelveticaNeue-Light", "Ubuntu", "Droid Sans", sans-serif;
+textarea, input, select {
+	font-family: inherit;
 }
 
 html {
-	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "HelveticaNeue-Light", "Ubuntu", "Droid Sans", sans-serif;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif;
 	color: #CCCCCC;
 	height: 100%;
 }
 
+html:lang(zh-Hans) {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Noto Sans", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Source Han Sans SC", "Source Han Sans CN", "Source Han Sans", sans-serif;
+}
+
+html:lang(zh-Hant) {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Noto Sans", "Microsoft Jhenghei", "PingFang TC", "Source Han Sans TC", "Source Han Sans", "Source Han Sans TW", sans-serif;
+}
+
+html:lang(ja) {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Noto Sans", "Meiryo", "Hiragino Kaku Gothic Pro", "Source Han Sans J", "Source Han Sans JP", "Source Han Sans", "Sazanami Gothic", "IPA Gothic", sans-serif;
+}
+
+html:lang(ko) {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Noto Sans", "Malgun Gothic", "Nanum Gothic", "Dotom", "Apple SD Gothic Neo", "AppleGothic", "Source Han Sans K", "Source Han Sans JR", "Source Han Sans", "UnDotum", "FBaekmuk Gulim", sans-serif;
+}
+
 body {
 	margin: 0;
-	overflow: scroll;
+	overflow-y: scroll;
 	height: 100%;
 }
 
@@ -109,16 +132,11 @@ body {
 
 .block .block-info {
 	width: 100%;
-	font-family: 'Menlo', 'Courier New', 'Courier', monospace;
 	font-size: 12px;
 	overflow: auto;
 	overflow-wrap: break-word;
-}
-pre {
-	margin: 10px 20px;
-}
-pre code {
-	font-family: 'Menlo', 'Courier New', 'Courier', monospace;
+	margin: 5px;
+	padding: 10px;
 }
 
 #issue-reporter {
@@ -126,6 +144,7 @@ pre code {
 	margin-left: auto;
 	margin-right: auto;
 	padding-top: 2em;
+	padding-bottom: 2em;
 	display: flex;
 	flex-direction: column;
 	height: 100%;
@@ -203,7 +222,6 @@ input:disabled {
 
 .instructions {
 	font-size: 12px;
-	margin-left: 1em;
 	margin-top: .5em;
 }
 
@@ -242,7 +260,7 @@ a {
 }
 
 .section .input-group .validation-error {
-	margin-left: 13%;
+	margin-left: 15%;
 }
 
 .section .inline-form-control, .section .inline-label {
@@ -262,23 +280,35 @@ a {
 }
 
 #similar-issues {
-	margin-left: 13%;
+	margin-left: 15%;
 	display: block;
+}
+
+#problem-source-help-text {
+	margin-left: calc(15% + 1em);
 }
 
 @media (max-width: 950px) {
 	.section .inline-label {
-		width: 13%;
+		width: 15%;
+	}
+
+	#problem-source-help-text {
+		margin-left: calc(15% + 1em);
 	}
 
 	.section .inline-form-control  {
-		width: calc(87% - 5px);
+		width: calc(85% - 5px);
 	}
 }
 
 @media (max-width: 620px) {
 	.section .inline-label {
 		display: none !important;
+	}
+
+	#problem-source-help-text {
+		margin-left: 1em;
 	}
 
 	.section .inline-form-control {

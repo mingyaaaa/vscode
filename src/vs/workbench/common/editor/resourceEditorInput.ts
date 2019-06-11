@@ -2,36 +2,30 @@
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
-'use strict';
 
-import { TPromise } from 'vs/base/common/winjs.base';
-import { EditorInput, ITextEditorModel } from 'vs/workbench/common/editor';
-import URI from 'vs/base/common/uri';
+import { EditorInput, ITextEditorModel, IModeSupport } from 'vs/workbench/common/editor';
+import { URI } from 'vs/base/common/uri';
 import { IReference } from 'vs/base/common/lifecycle';
-import { telemetryURIDescriptor } from 'vs/platform/telemetry/common/telemetryUtils';
 import { ITextModelService } from 'vs/editor/common/services/resolverService';
 import { ResourceEditorModel } from 'vs/workbench/common/editor/resourceEditorModel';
-import { IHashService } from 'vs/workbench/services/hash/common/hashService';
 
 /**
  * A read-only text editor input whos contents are made of the provided resource that points to an existing
  * code editor model.
  */
-export class ResourceEditorInput extends EditorInput {
+export class ResourceEditorInput extends EditorInput implements IModeSupport {
 
 	static readonly ID: string = 'workbench.editors.resourceEditorInput';
 
-	private modelReference: TPromise<IReference<ITextEditorModel>>;
-	private resource: URI;
-	private name: string;
-	private description: string;
+	private cachedModel: ResourceEditorModel | null;
+	private modelReference: Promise<IReference<ITextEditorModel>> | null;
 
 	constructor(
-		name: string,
-		description: string,
-		resource: URI,
-		@ITextModelService private textModelResolverService: ITextModelService,
-		@IHashService private hashService: IHashService
+		private name: string,
+		private description: string | null,
+		private readonly resource: URI,
+		private preferredMode: string | undefined,
+		@ITextModelService private readonly textModelResolverService: ITextModelService
 	) {
 		super();
 
@@ -40,87 +34,95 @@ export class ResourceEditorInput extends EditorInput {
 		this.resource = resource;
 	}
 
-	public getResource(): URI {
+	getResource(): URI {
 		return this.resource;
 	}
 
-	public getTypeId(): string {
+	getTypeId(): string {
 		return ResourceEditorInput.ID;
 	}
 
-	public getName(): string {
+	getName(): string {
 		return this.name;
 	}
 
-	public setName(name: string): void {
+	setName(name: string): void {
 		if (this.name !== name) {
 			this.name = name;
 			this._onDidChangeLabel.fire();
 		}
 	}
 
-	public getDescription(): string {
+	getDescription(): string | null {
 		return this.description;
 	}
 
-	public setDescription(description: string): void {
+	setDescription(description: string): void {
 		if (this.description !== description) {
 			this.description = description;
 			this._onDidChangeLabel.fire();
 		}
 	}
 
-	public getTelemetryDescriptor(): object {
-		const descriptor = super.getTelemetryDescriptor();
-		descriptor['resource'] = telemetryURIDescriptor(this.resource, path => this.hashService.createSHA1(path));
+	setMode(mode: string): void {
+		this.setPreferredMode(mode);
 
-		/* __GDPR__FRAGMENT__
-			"EditorTelemetryDescriptor" : {
-				"resource": { "${inline}": [ "${URIDescriptor}" ] }
-			}
-		*/
-		return descriptor;
+		if (this.cachedModel) {
+			this.cachedModel.setMode(mode);
+		}
 	}
 
-	public resolve(refresh?: boolean): TPromise<ITextEditorModel> {
+	setPreferredMode(mode: string): void {
+		this.preferredMode = mode;
+	}
+
+	async resolve(): Promise<ITextEditorModel> {
 		if (!this.modelReference) {
 			this.modelReference = this.textModelResolverService.createModelReference(this.resource);
 		}
 
-		return this.modelReference.then(ref => {
-			const model = ref.object;
+		const ref = await this.modelReference;
 
-			if (!(model instanceof ResourceEditorModel)) {
-				ref.dispose();
-				this.modelReference = null;
+		const model = ref.object;
 
-				return TPromise.wrapError<ITextEditorModel>(new Error(`Unexpected model for ResourceInput: ${this.resource}`));
-			}
+		// Ensure the resolved model is of expected type
+		if (!(model instanceof ResourceEditorModel)) {
+			ref.dispose();
+			this.modelReference = null;
 
-			return model;
-		});
+			throw new Error(`Unexpected model for ResourceInput: ${this.resource}`);
+		}
+
+		this.cachedModel = model;
+
+		// Set mode if we have a preferred mode configured
+		if (this.preferredMode) {
+			model.setMode(this.preferredMode);
+		}
+
+		return model;
 	}
 
-	public matches(otherInput: any): boolean {
+	matches(otherInput: unknown): boolean {
 		if (super.matches(otherInput) === true) {
 			return true;
 		}
 
+		// Compare by properties
 		if (otherInput instanceof ResourceEditorInput) {
-			let otherResourceEditorInput = <ResourceEditorInput>otherInput;
-
-			// Compare by properties
-			return otherResourceEditorInput.resource.toString() === this.resource.toString();
+			return otherInput.resource.toString() === this.resource.toString();
 		}
 
 		return false;
 	}
 
-	public dispose(): void {
+	dispose(): void {
 		if (this.modelReference) {
-			this.modelReference.done(ref => ref.dispose());
+			this.modelReference.then(ref => ref.dispose());
 			this.modelReference = null;
 		}
+
+		this.cachedModel = null;
 
 		super.dispose();
 	}

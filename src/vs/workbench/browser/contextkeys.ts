@@ -18,14 +18,21 @@ import { WorkbenchState, IWorkspaceContextService } from 'vs/platform/workspace/
 import { SideBarVisibleContext } from 'vs/workbench/common/viewlet';
 import { IWorkbenchLayoutService, Parts, Position } from 'vs/workbench/services/layout/browser/layoutService';
 import { IViewletService } from 'vs/workbench/services/viewlet/browser/viewlet';
-import { isMacintosh, isLinux, isWindows } from 'vs/base/common/platform';
+import { isMacintosh, isLinux, isWindows, isWeb } from 'vs/base/common/platform';
 import { PanelPositionContext } from 'vs/workbench/common/panel';
+import { getRemoteName } from 'vs/platform/remote/common/remoteHosts';
 
 export const IsMacContext = new RawContextKey<boolean>('isMac', isMacintosh);
 export const IsLinuxContext = new RawContextKey<boolean>('isLinux', isLinux);
 export const IsWindowsContext = new RawContextKey<boolean>('isWindows', isWindows);
 
-export const RemoteAuthorityContext = new RawContextKey<string>('remoteAuthority', '');
+export const IsWebContext = new RawContextKey<boolean>('isWeb', isWeb);
+export const IsMacNativeContext = new RawContextKey<boolean>('isMacNative', isMacintosh && !isWeb);
+
+export const Deprecated_RemoteAuthorityContext = new RawContextKey<string>('remoteAuthority', '');
+
+export const RemoteNameContext = new RawContextKey<string>('remoteName', '');
+export const RemoteConnectionState = new RawContextKey<'' | 'initializing' | 'disconnected' | 'connected'>('remoteConnectionState', '');
 
 export const HasMacNativeTabsContext = new RawContextKey<boolean>('hasMacNativeTabs', false);
 
@@ -113,7 +120,10 @@ export class WorkbenchContextKeysHandler extends Disposable {
 		IsLinuxContext.bindTo(this.contextKeyService);
 		IsWindowsContext.bindTo(this.contextKeyService);
 
-		RemoteAuthorityContext.bindTo(this.contextKeyService).set(this.environmentService.configuration.remoteAuthority || '');
+		IsWebContext.bindTo(this.contextKeyService);
+		IsMacNativeContext.bindTo(this.contextKeyService);
+
+		RemoteNameContext.bindTo(this.contextKeyService).set(getRemoteName(this.environmentService.configuration.remoteAuthority) || '');
 
 		// macOS Native Tabs
 		const windowConfig = this.configurationService.getValue<IWindowsConfiguration>();

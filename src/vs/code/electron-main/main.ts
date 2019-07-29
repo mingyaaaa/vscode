@@ -26,20 +26,21 @@ import { IEnvironmentService, ParsedArgs } from 'vs/platform/environment/common/
 import { EnvironmentService } from 'vs/platform/environment/node/environmentService';
 import { IConfigurationService } from 'vs/platform/configuration/common/configuration';
 import { ConfigurationService } from 'vs/platform/configuration/node/configurationService';
-import { IRequestService } from 'vs/platform/request/node/request';
+import { IRequestService } from 'vs/platform/request/common/request';
 import { RequestService } from 'vs/platform/request/electron-main/requestService';
 import * as fs from 'fs';
 import { CodeApplication } from 'vs/code/electron-main/app';
 import { localize } from 'vs/nls';
 import { mnemonicButtonLabel } from 'vs/base/common/labels';
 import { SpdLogService } from 'vs/platform/log/node/spdlogService';
-import { IDiagnosticsService, DiagnosticsService } from 'vs/platform/diagnostics/electron-main/diagnosticsService';
 import { BufferLogService } from 'vs/platform/log/common/bufferLog';
-import { uploadLogs } from 'vs/code/electron-main/logUploader';
 import { setUnexpectedErrorHandler } from 'vs/base/common/errors';
 import { IThemeMainService, ThemeMainService } from 'vs/platform/theme/electron-main/themeMainService';
 import { Client } from 'vs/base/parts/ipc/common/ipc.net';
 import { once } from 'vs/base/common/functional';
+import { ISignService } from 'vs/platform/sign/common/sign';
+import { SignService } from 'vs/platform/sign/node/signService';
+import { DiagnosticsService } from 'vs/platform/diagnostics/node/diagnosticsIpc';
 
 class ExpectedError extends Error {
 	readonly isExpected = true;
@@ -141,12 +142,12 @@ class CodeMain {
 		process.once('exit', () => logService.dispose());
 		services.set(ILogService, logService);
 
-		services.set(IConfigurationService, new ConfigurationService(environmentService.settingsResource.path));
+		services.set(IConfigurationService, new ConfigurationService(environmentService.settingsResource));
 		services.set(ILifecycleService, new SyncDescriptor(LifecycleService));
 		services.set(IStateService, new SyncDescriptor(StateService));
 		services.set(IRequestService, new SyncDescriptor(RequestService));
-		services.set(IDiagnosticsService, new SyncDescriptor(DiagnosticsService));
 		services.set(IThemeMainService, new SyncDescriptor(ThemeMainService));
+		services.set(ISignService, new SyncDescriptor(SignService));
 
 		return [new InstantiationService(services, true), instanceEnvironment];
 	}
@@ -160,7 +161,7 @@ class CodeMain {
 			environmentService.logsPath,
 			environmentService.globalStorageHome,
 			environmentService.workspaceStorageHome,
-			environmentService.backupHome
+			environmentService.backupHome.fsPath
 		].map((path): undefined | Promise<void> => path ? mkdirp(path) : undefined));
 
 		// Configuration service
@@ -260,7 +261,7 @@ class CodeMain {
 			// Skip this if we are running with --wait where it is expected that we wait for a while.
 			// Also skip when gathering diagnostics (--status) which can take a longer time.
 			let startupWarningDialogHandle: NodeJS.Timeout | undefined = undefined;
-			if (!environmentService.wait && !environmentService.status && !environmentService.args['upload-logs']) {
+			if (!environmentService.wait && !environmentService.status) {
 				startupWarningDialogHandle = setTimeout(() => {
 					this.showStartupWarningDialog(
 						localize('secondInstanceNoResponse', "Another instance of {0} is running but not responding", product.nameShort),
@@ -275,22 +276,18 @@ class CodeMain {
 			// Process Info
 			if (environmentService.args.status) {
 				return instantiationService.invokeFunction(async accessor => {
-					const diagnostics = await accessor.get(IDiagnosticsService).getDiagnostics(launchClient);
+					// Create a diagnostic service connected to the existing shared process
+					const sharedProcessClient = await connect(environmentService.sharedIPCHandle, 'main');
+					const diagnosticsChannel = sharedProcessClient.getChannel('diagnostics');
+					const diagnosticsService = new DiagnosticsService(diagnosticsChannel);
+					const mainProcessInfo = await launchClient.getMainProcessInfo();
+					const remoteDiagnostics = await launchClient.getRemoteDiagnostics({ includeProcesses: true, includeWorkspaceMetadata: true });
+					const diagnostics = await diagnosticsService.getDiagnostics(mainProcessInfo, remoteDiagnostics);
 					console.log(diagnostics);
 
 					throw new ExpectedError();
 				});
 			}
-
-			// Log uploader
-			if (typeof environmentService.args['upload-logs'] !== 'undefined') {
-				return instantiationService.invokeFunction(async accessor => {
-					await uploadLogs(launchClient, accessor.get(IRequestService), environmentService);
-
-					throw new ExpectedError();
-				});
-			}
-
 
 			// Windows: allow to set foreground
 			if (platform.isWindows) {
@@ -319,13 +316,6 @@ class CodeMain {
 			throw new ExpectedError('Terminating...');
 		}
 
-		// Log uploader usage info
-		if (typeof environmentService.args['upload-logs'] !== 'undefined') {
-			logService.warn('Warning: The --upload-logs argument can only be used if Code is already running. Please run it again after Code has started.');
-
-			throw new ExpectedError('Terminating...');
-		}
-
 		// dock might be hidden at this case due to a retry
 		if (platform.isMacintosh) {
 			app.dock.show();
@@ -342,7 +332,9 @@ class CodeMain {
 		if (error.code === 'EACCES' || error.code === 'EPERM') {
 			this.showStartupWarningDialog(
 				localize('startupDataDirError', "Unable to write program user data."),
-				localize('startupDataDirErrorDetail', "Please make sure the directories {0} and {1} are writeable.", environmentService.userDataPath, environmentService.extensionsPath)
+				environmentService.extensionsPath
+					? localize('startupUserDataAndExtensionsDirErrorDetail', "Please make sure the directories {0} and {1} are writeable.", environmentService.userDataPath, environmentService.extensionsPath)
+					: localize('startupUserDataDirErrorDetail', "Please make sure the directory {0} is writeable.", environmentService.userDataPath)
 			);
 		}
 	}

@@ -364,6 +364,7 @@
 					"**/vs/platform/*/{common,browser}/**",
 					"**/vs/editor/{common,browser}/**",
 					"**/vs/editor/contrib/**", // editor/contrib is equivalent to /browser/ by convention
+					"**/vs/workbench/workbench.web.api",
 					"**/vs/workbench/{common,browser}/**",
 					"**/vs/workbench/services/*/{common,browser}/**",
 					"assert"
@@ -429,7 +430,8 @@
 					"**/vs/editor/common/**",
 					"**/vs/workbench/common/**",
 					"**/vs/workbench/services/**/common/**",
-					"**/vs/workbench/api/**/common/**"
+					"**/vs/workbench/api/**/common/**",
+					"vscode-textmate"
 				]
 			},
 			{
@@ -440,6 +442,7 @@
 					"**/vs/base/**/{common,browser}/**",
 					"**/vs/platform/**/{common,browser}/**",
 					"**/vs/editor/{common,browser}/**",
+					"**/vs/workbench/workbench.web.api",
 					"**/vs/workbench/{common,browser}/**",
 					"**/vs/workbench/services/**/{common,browser}/**",
 					"vscode-textmate",
@@ -513,6 +516,13 @@
 				]
 			},
 			{
+				"target": "**/vs/workbench/contrib/extensions/browser/**",
+				"restrictions": [
+					"semver-umd",
+					"**/vs/**"
+				]
+			},
+			{
 				"target": "**/vs/code/node/**",
 				"restrictions": [
 					"vs/nls",
@@ -560,7 +570,11 @@
 				]
 			},
 			{
-				"target": "**/{node,electron-browser,electron-main,extensions}/**",
+				"target": "**/{node,electron-browser,electron-main}/**",
+				"restrictions": "**/*"
+			},
+			{
+				"target": "**/extensions/**",
 				"restrictions": "**/*"
 			},
 			{

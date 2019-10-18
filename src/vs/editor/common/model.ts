@@ -14,6 +14,7 @@ import { IModelContentChange, IModelContentChangedEvent, IModelDecorationsChange
 import { SearchData } from 'vs/editor/common/model/textModelSearch';
 import { LanguageId, LanguageIdentifier, FormattingOptions } from 'vs/editor/common/modes';
 import { ThemeColor } from 'vs/platform/theme/common/themeService';
+import { MultilineTokens } from 'vs/editor/common/model/tokensStore';
 
 /**
  * Vertical Lane in the overview ruler of the editor.
@@ -458,8 +459,8 @@ export class FindMatch {
  */
 export interface IFoundBracket {
 	range: Range;
-	open: string;
-	close: string;
+	open: string[];
+	close: string[];
 	isOpen: boolean;
 }
 
@@ -780,6 +781,11 @@ export interface ITextModel {
 	findPreviousMatch(searchString: string, searchStart: IPosition, isRegex: boolean, matchCase: boolean, wordSeparators: string | null, captureMatches: boolean): FindMatch | null;
 
 	/**
+	 * @internal
+	 */
+	setTokens(tokens: MultilineTokens[]): void;
+
+	/**
 	 * Flush all tokenization state.
 	 * @internal
 	 */
@@ -874,6 +880,13 @@ export interface ITextModel {
 	 * @internal
 	 */
 	findNextBracket(position: IPosition): IFoundBracket | null;
+
+	/**
+	 * Find the enclosing brackets that contain `position`.
+	 * @param position The position at which to start the search.
+	 * @internal
+	 */
+	findEnclosingBrackets(position: IPosition): [Range, Range] | null;
 
 	/**
 	 * Given a `position`, if the position is on top or near a bracket,

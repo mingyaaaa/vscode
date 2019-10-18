@@ -6,6 +6,7 @@
 import { Event } from 'vs/base/common/event';
 import { isFalsyOrWhitespace } from 'vs/base/common/strings';
 import { createDecorator } from 'vs/platform/instantiation/common/instantiation';
+import { equals } from 'vs/base/common/arrays';
 
 export const enum ContextKeyExprType {
 	Defined = 1,
@@ -19,10 +20,10 @@ export const enum ContextKeyExprType {
 }
 
 export interface IContextKeyExprMapper {
-	mapDefined(key: string): ContextKeyDefinedExpr;
-	mapNot(key: string): ContextKeyNotExpr;
-	mapEquals(key: string, value: any): ContextKeyEqualsExpr;
-	mapNotEquals(key: string, value: any): ContextKeyNotEqualsExpr;
+	mapDefined(key: string): ContextKeyExpr;
+	mapNot(key: string): ContextKeyExpr;
+	mapEquals(key: string, value: any): ContextKeyExpr;
+	mapNotEquals(key: string, value: any): ContextKeyExpr;
 	mapRegex(key: string, regexp: RegExp | null): ContextKeyRegexExpr;
 }
 
@@ -190,7 +191,7 @@ function cmp(a: ContextKeyExpr, b: ContextKeyExpr): number {
 }
 
 export class ContextKeyDefinedExpr implements ContextKeyExpr {
-	public static create(key: string): ContextKeyExpr {
+	public static create(key: string): ContextKeyDefinedExpr {
 		return new ContextKeyDefinedExpr(key);
 	}
 
@@ -424,7 +425,7 @@ export class ContextKeyNotExpr implements ContextKeyExpr {
 
 export class ContextKeyRegexExpr implements ContextKeyExpr {
 
-	public static create(key: string, regexp: RegExp | null): ContextKeyExpr {
+	public static create(key: string, regexp: RegExp | null): ContextKeyRegexExpr {
 		return new ContextKeyRegexExpr(key, regexp);
 	}
 
@@ -574,15 +575,7 @@ export class ContextKeyAndExpr implements ContextKeyExpr {
 
 	public equals(other: ContextKeyExpr): boolean {
 		if (other instanceof ContextKeyAndExpr) {
-			if (this.expr.length !== other.expr.length) {
-				return false;
-			}
-			for (let i = 0, len = this.expr.length; i < len; i++) {
-				if (!this.expr[i].equals(other.expr[i])) {
-					return false;
-				}
-			}
-			return true;
+			return equals(this.expr, other.expr, (a, b) => a.equals(b));
 		}
 		return false;
 	}
@@ -674,15 +667,7 @@ export class ContextKeyOrExpr implements ContextKeyExpr {
 
 	public equals(other: ContextKeyExpr): boolean {
 		if (other instanceof ContextKeyOrExpr) {
-			if (this.expr.length !== other.expr.length) {
-				return false;
-			}
-			for (let i = 0, len = this.expr.length; i < len; i++) {
-				if (!this.expr[i].equals(other.expr[i])) {
-					return false;
-				}
-			}
-			return true;
+			return equals(this.expr, other.expr, (a, b) => a.equals(b));
 		}
 		return false;
 	}
@@ -827,7 +812,7 @@ export interface IContextKeyChangeEvent {
 }
 
 export interface IContextKeyService {
-	_serviceBrand: any;
+	_serviceBrand: undefined;
 	dispose(): void;
 
 	onDidChangeContext: Event<IContextKeyChangeEvent>;
